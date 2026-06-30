@@ -82,10 +82,8 @@ artifacts/question_crop_suggestions/20260630-131213/
   page_001_left.paddleocr.json
   p001_left_annotated.png
   set_01_03_passage_candidate/
-    part_01_p001_left.png
     set_01_03_passage_candidate_preview.png
   q01_candidate/
-    part_01_p001_left.png
     q01_candidate_preview.png
   suggestions.json
 ```
@@ -95,8 +93,10 @@ compact OCR-row/provenance records by default, not full PaddleOCR raw payload
 dumps. `suggestions.json` preserves selected set-header anchors, selected
 question anchors, passage/question candidate separation, page, column,
 source-image, local crop, and source-page crop provenance for every candidate
-part. The candidates are not verified question text and should not be copied
-into `data/canonical/` without review.
+part. Per-candidate `part_*_left.png` / `part_*_right.png` inputs are deleted
+after the stitched preview is created unless `--keep-crop-part-images` is used.
+The candidates are not verified question text and should not be copied into
+`data/canonical/` without review.
 
 ### `data/canonical/`
 

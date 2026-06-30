@@ -171,6 +171,11 @@ def parse_args() -> argparse.Namespace:
         help="Pixel padding around emitted candidate crop parts. Default: 24.",
     )
     parser.add_argument(
+        "--keep-crop-part-images",
+        action="store_true",
+        help="Keep per-candidate part PNGs after preview images are stitched. Default: false.",
+    )
+    parser.add_argument(
         "--stream-gap",
         type=int,
         default=40,
@@ -895,6 +900,7 @@ def write_interval_crop_parts(
     interval_start: float,
     interval_end: float,
     crop_padding: int,
+    keep_crop_part_images: bool,
     directory_name: str,
     preview_name: str,
 ) -> tuple[list[dict[str, Any]], str | None]:
@@ -948,6 +954,7 @@ def write_interval_crop_parts(
                 "block_id": block.block_id,
                 "source_image_path": block.image_path,
                 "crop_image_path": str(part_path),
+                "crop_image_deleted_after_preview": False,
                 "local_crop_bbox": crop_bbox,
                 "local_crop_basis": crop_basis,
                 "included_row_ids": row_ids,
@@ -958,6 +965,7 @@ def write_interval_crop_parts(
         )
 
     preview_path: str | None = None
+    preview_saved = False
     if part_images:
         preview_path = str(candidate_dir / preview_name)
         loaded = [Image.open(path).convert("RGB") for path in part_images]
@@ -974,9 +982,18 @@ def write_interval_crop_parts(
                     draw.line([(0, y + 7), (max_width, y + 7)], fill=(200, 200, 200), width=2)
                     y += 16
             preview.save(preview_path)
+            preview_saved = True
         finally:
             for image in loaded:
                 image.close()
+
+    if preview_saved and not keep_crop_part_images:
+        for part, part_path in zip(parts, part_images, strict=False):
+            if part_path.exists():
+                part_path.unlink()
+            part["deleted_crop_image_path"] = str(part_path)
+            part["crop_image_path"] = None
+            part["crop_image_deleted_after_preview"] = True
 
     return parts, preview_path
 
@@ -1022,6 +1039,7 @@ def save_candidate_crops(
     selected_anchors: list[AnchorCandidate],
     selected_set_headers: list[SetHeaderAnchor],
     crop_padding: int,
+    keep_crop_part_images: bool,
 ) -> list[dict[str, Any]]:
     suggestions: list[dict[str, Any]] = []
     if not blocks:
@@ -1048,6 +1066,7 @@ def save_candidate_crops(
             interval_start=set_header.stream_y_start,
             interval_end=first_question_anchor.stream_y_start,
             crop_padding=crop_padding,
+            keep_crop_part_images=keep_crop_part_images,
             directory_name=directory_name,
             preview_name=f"set_{set_header.start_question:02d}_{set_header.end_question:02d}_passage_candidate_preview.png",
         )
@@ -1129,6 +1148,7 @@ def save_candidate_crops(
             interval_start=interval_start,
             interval_end=interval_end,
             crop_padding=crop_padding,
+            keep_crop_part_images=keep_crop_part_images,
             directory_name=f"q{anchor.question_number:02d}_candidate",
             preview_name=f"q{anchor.question_number:02d}_candidate_preview.png",
         )
@@ -1267,6 +1287,7 @@ def build_stream(args: argparse.Namespace, run_dir: Path) -> dict[str, Any]:
         selected_anchors=selected_anchors,
         selected_set_headers=selected_set_headers,
         crop_padding=args.crop_padding,
+        keep_crop_part_images=args.keep_crop_part_images,
     )
     annotated_paths = (
         []
@@ -1291,6 +1312,7 @@ def build_stream(args: argparse.Namespace, run_dir: Path) -> dict[str, Any]:
             "center_gutter": args.center_gutter,
             "content_padding": args.content_padding,
             "crop_padding": args.crop_padding,
+            "keep_crop_part_images": args.keep_crop_part_images,
             "stream_gap": args.stream_gap,
             "min_anchor_score": args.min_anchor_score,
             "allow_weak_question_anchors": args.allow_weak_question_anchors,

@@ -124,10 +124,8 @@ page_001_left.png
 page_001_left.paddleocr.json
 p001_left_annotated.png
 set_01_03_passage_candidate/
-  part_01_p001_left.png
   set_01_03_passage_candidate_preview.png
 q01_candidate/
-  part_01_p001_left.png
   q01_candidate_preview.png
 suggestions.json
 ```
@@ -148,6 +146,12 @@ Every item in `suggestions.json` is labeled as a candidate or suggestion and
 contains provenance back to page, column, source image, local crop coordinates,
 source-page coordinates, and the crop basis used for each part. These outputs
 are evidence for review, not verified question text.
+
+By default, per-candidate part PNGs are deleted after the stitched preview is
+written, so candidate directories keep the preview image without duplicate
+`part_*_left.png` / `part_*_right.png` inputs. `suggestions.json` still keeps
+the crop coordinates and records the deleted part path. Use
+`--keep-crop-part-images` when you need the individual part PNGs for debugging.
 
 ## Test an existing image
 
