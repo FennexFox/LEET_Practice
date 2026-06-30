@@ -105,6 +105,11 @@ in a set at the next set header when possible. When a candidate crosses a
 column or page boundary, the output keeps separate source crop parts and also
 writes a stitched preview image for quick review.
 
+Each crop part is trimmed to the non-header/footer OCR rows that actually
+overlap that candidate interval. This avoids carrying page headers, form labels,
+page numbers, and bottom margin noise into passage previews or into question
+candidates that continue in the next column.
+
 Outputs are written under:
 
 ```text
@@ -141,8 +146,8 @@ in that run directory.
 
 Every item in `suggestions.json` is labeled as a candidate or suggestion and
 contains provenance back to page, column, source image, local crop coordinates,
-and source-page coordinates. These outputs are evidence for review, not
-verified question text.
+source-page coordinates, and the crop basis used for each part. These outputs
+are evidence for review, not verified question text.
 
 ## Test an existing image
 

@@ -48,6 +48,17 @@ HEADER_FOOTER_RE = re.compile(
     r"(\uBC95\uD559\uC801\uC131\uC2DC\uD5D8|\uC5B8\uC5B4\uC774\uD574|\uCD94\uB9AC\uB17C\uC99D|"
     r"\uB17C\uC220|\uD640\uC218\uD615|\uC9DD\uC218\uD615|\uC131\uBA85|\uC218\uD5D8\uBC88\uD638|\uAD50\uC2DC)"
 )
+HEADER_FOOTER_EDGE_TEXT_RE = re.compile(
+    r"^(?:"
+    r"\uC5B8\uC5B4|\uC774\uD574|\uC5B8\d+|"
+    r"\uCD94\uB9AC|\uB17C\uC99D|\uB17C\uC220|"
+    r"\uD640\uC218\uD615|\uC9DD\uC218\uD615|"
+    r"\uC131\uBA85|\uC218\uD5D8|\uBC88\uD638|\uC218\uD5D8\uBC88\uD638|\uAD50\uC2DC|"
+    r"\d+\s*\uD638"
+    r")$"
+)
+HEADER_FOOTER_TOP_EDGE_RATIO = 0.18
+HEADER_FOOTER_BOTTOM_EDGE_RATIO = 0.92
 
 
 @dataclass(frozen=True)
@@ -503,14 +514,17 @@ def classify_excluded_row(text: str, local_bbox: list[int] | None, width: int, h
     near_top = False
     near_bottom = False
     if local_bbox is not None:
-        near_top = local_bbox[1] <= int(height * 0.08)
-        near_bottom = local_bbox[3] >= int(height * 0.92)
+        near_top = local_bbox[1] <= int(height * HEADER_FOOTER_TOP_EDGE_RATIO)
+        near_bottom = local_bbox[3] >= int(height * HEADER_FOOTER_BOTTOM_EDGE_RATIO)
 
     if re.fullmatch(r"\d{1,3}", stripped) and (near_top or near_bottom):
         reasons.append("standalone-page-number-at-page-edge")
 
     if (near_top or near_bottom) and HEADER_FOOTER_RE.search(stripped):
         reasons.append("known-header-footer-fragment-at-page-edge")
+
+    if (near_top or near_bottom) and HEADER_FOOTER_EDGE_TEXT_RE.fullmatch(stripped):
+        reasons.append("short-header-footer-fragment-at-page-edge")
 
     if (near_top or near_bottom) and re.fullmatch(r"[-\u2013\u2014\s\d]+", stripped):
         reasons.append("edge-rule-or-page-marker")
@@ -838,10 +852,46 @@ def intersect_interval(a0: float, a1: float, b0: float, b1: float) -> tuple[floa
     return start, end
 
 
+def rows_in_interval(rows: list[StreamRow], interval_start: float, interval_end: float) -> list[StreamRow]:
+    return [
+        row
+        for row in rows
+        if (
+            not row.excluded
+            and row.local_bbox is not None
+            and row.stream_y_end > interval_start
+            and row.stream_y_start < interval_end
+        )
+    ]
+
+
+def row_union_crop_bbox(
+    block: ColumnBlock,
+    block_rows: list[StreamRow],
+    overlap: tuple[float, float],
+) -> tuple[list[int] | None, list[str]]:
+    interval_rows = rows_in_interval(block_rows, overlap[0], overlap[1])
+    row_bboxes = [row.local_bbox for row in interval_rows if row.local_bbox is not None]
+    if not row_bboxes:
+        return None, []
+
+    row_union = union_bboxes(row_bboxes)
+    if row_union is None:
+        return None, []
+
+    return [
+        block.content_bbox[0],
+        row_union[1],
+        block.content_bbox[2],
+        row_union[3],
+    ], [row.row_id for row in interval_rows]
+
+
 def write_interval_crop_parts(
     *,
     run_dir: Path,
     blocks: list[ColumnBlock],
+    rows_by_block: dict[str, list[StreamRow]],
     interval_start: float,
     interval_end: float,
     crop_padding: int,
@@ -864,10 +914,20 @@ def write_interval_crop_parts(
             continue
         with Image.open(block.image_path) as img:
             width, height = img.size
-            local_y0 = block.content_bbox[1] + int(round(overlap[0] - block.stream_y_start))
-            local_y1 = block.content_bbox[1] + int(round(overlap[1] - block.stream_y_start))
+            crop_basis = "interval_row_union"
+            row_ids: list[str] = []
+            local_crop_source_bbox, row_ids = row_union_crop_bbox(
+                block,
+                rows_by_block.get(block.block_id, []),
+                overlap,
+            )
+            if local_crop_source_bbox is None:
+                crop_basis = "stream_overlap_content_bbox_fallback"
+                local_y0 = block.content_bbox[1] + int(round(overlap[0] - block.stream_y_start))
+                local_y1 = block.content_bbox[1] + int(round(overlap[1] - block.stream_y_start))
+                local_crop_source_bbox = [block.content_bbox[0], local_y0, block.content_bbox[2], local_y1]
             crop_bbox = pad_bbox(
-                [block.content_bbox[0], local_y0, block.content_bbox[2], local_y1],
+                local_crop_source_bbox,
                 crop_padding,
                 width,
                 height,
@@ -889,6 +949,8 @@ def write_interval_crop_parts(
                 "source_image_path": block.image_path,
                 "crop_image_path": str(part_path),
                 "local_crop_bbox": crop_bbox,
+                "local_crop_basis": crop_basis,
+                "included_row_ids": row_ids,
                 "source_page_crop_bbox": source_page_bbox(crop_bbox, block.page_bbox),
                 "stream_y_start": overlap[0],
                 "stream_y_end": overlap[1],
@@ -956,6 +1018,7 @@ def save_candidate_crops(
     *,
     run_dir: Path,
     blocks: list[ColumnBlock],
+    rows: list[StreamRow],
     selected_anchors: list[AnchorCandidate],
     selected_set_headers: list[SetHeaderAnchor],
     crop_padding: int,
@@ -968,6 +1031,9 @@ def save_candidate_crops(
     selected_anchors = sorted(selected_anchors, key=lambda item: item.stream_y_start)
     selected_set_headers = sorted(selected_set_headers, key=lambda item: item.stream_y_start)
     anchors_by_question = {anchor.question_number: anchor for anchor in selected_anchors}
+    rows_by_block: dict[str, list[StreamRow]] = {}
+    for row in rows:
+        rows_by_block.setdefault(row.block_id, []).append(row)
 
     for set_header in selected_set_headers:
         first_question_anchor = anchors_by_question.get(set_header.start_question)
@@ -978,6 +1044,7 @@ def save_candidate_crops(
         parts, preview_path = write_interval_crop_parts(
             run_dir=run_dir,
             blocks=blocks,
+            rows_by_block=rows_by_block,
             interval_start=set_header.stream_y_start,
             interval_end=first_question_anchor.stream_y_start,
             crop_padding=crop_padding,
@@ -1058,6 +1125,7 @@ def save_candidate_crops(
         parts, preview_path = write_interval_crop_parts(
             run_dir=run_dir,
             blocks=blocks,
+            rows_by_block=rows_by_block,
             interval_start=interval_start,
             interval_end=interval_end,
             crop_padding=crop_padding,
@@ -1195,6 +1263,7 @@ def build_stream(args: argparse.Namespace, run_dir: Path) -> dict[str, Any]:
     suggestions = save_candidate_crops(
         run_dir=run_dir,
         blocks=blocks,
+        rows=rows,
         selected_anchors=selected_anchors,
         selected_set_headers=selected_set_headers,
         crop_padding=args.crop_padding,

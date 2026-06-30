@@ -55,6 +55,12 @@ extracted rows, row bounding boxes, confidence, provenance, OCR status, and
 minimal options. Full raw PaddleOCR payloads are intentionally omitted unless a
 short debug run explicitly uses `--include-raw-paddle-payload`.
 
+Candidate crop parts are trimmed from the OCR rows inside each interval rather
+than blindly using the whole column content box. Header/footer rows are
+conservatively excluded before content-box estimation and crop emission, so
+page numbers, exam labels, form labels, and bottom margin fragments are less
+likely to appear when a suggestion crosses into the next column or page.
+
 This is intentionally not authoritative extraction. OCR may miss a number,
 misread a set header, or mistake another leading number for a question anchor.
 Question-anchor scoring rejects common false positives from choices, inline
