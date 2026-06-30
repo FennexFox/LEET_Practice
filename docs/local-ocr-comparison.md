@@ -110,6 +110,11 @@ overlap that candidate interval. This avoids carrying page headers, form labels,
 page numbers, and bottom margin noise into passage previews or into question
 candidates that continue in the next column.
 
+For question candidates, the next question or set-header anchor is only a
+boundary limit. The emitted question end is derived from the last OCR row whose
+center belongs to the current question, so the first line of the next question
+is not intentionally included in the preview.
+
 Outputs are written under:
 
 ```text

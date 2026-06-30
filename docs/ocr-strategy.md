@@ -60,6 +60,9 @@ than blindly using the whole column content box. Header/footer rows are
 conservatively excluded before content-box estimation and crop emission, so
 page numbers, exam labels, form labels, and bottom margin fragments are less
 likely to appear when a suggestion crosses into the next column or page.
+For question candidates, the following question or set-header anchor is treated
+as an exclusive boundary limit, not as the emitted end anchor. The emitted end is
+derived from the last OCR row assigned to the current question.
 After a stitched preview is written, the per-candidate part PNGs are deleted by
 default to avoid duplicate local artifacts; their crop coordinates and deleted
 paths remain in `suggestions.json`. Use `--keep-crop-part-images` only for

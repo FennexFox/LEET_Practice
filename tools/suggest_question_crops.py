@@ -864,8 +864,7 @@ def rows_in_interval(rows: list[StreamRow], interval_start: float, interval_end:
         if (
             not row.excluded
             and row.local_bbox is not None
-            and row.stream_y_end > interval_start
-            and row.stream_y_start < interval_end
+            and interval_start <= ((row.stream_y_start + row.stream_y_end) / 2) < interval_end
         )
     ]
 
@@ -890,6 +889,10 @@ def row_union_crop_bbox(
         block.content_bbox[2],
         row_union[3],
     ], [row.row_id for row in interval_rows]
+
+
+def interval_local_y_end(block: ColumnBlock, overlap: tuple[float, float]) -> int:
+    return block.content_bbox[1] + int(round(overlap[1] - block.stream_y_start))
 
 
 def write_interval_crop_parts(
@@ -928,16 +931,15 @@ def write_interval_crop_parts(
                 overlap,
             )
             if local_crop_source_bbox is None:
-                crop_basis = "stream_overlap_content_bbox_fallback"
-                local_y0 = block.content_bbox[1] + int(round(overlap[0] - block.stream_y_start))
-                local_y1 = block.content_bbox[1] + int(round(overlap[1] - block.stream_y_start))
-                local_crop_source_bbox = [block.content_bbox[0], local_y0, block.content_bbox[2], local_y1]
+                continue
             crop_bbox = pad_bbox(
                 local_crop_source_bbox,
                 crop_padding,
                 width,
                 height,
             )
+            interval_y_end = max(0, min(height, interval_local_y_end(block, overlap)))
+            crop_bbox[3] = min(crop_bbox[3], interval_y_end)
             if crop_bbox[2] <= crop_bbox[0] or crop_bbox[3] <= crop_bbox[1]:
                 continue
             part_image = img.crop(tuple(crop_bbox))
@@ -957,6 +959,7 @@ def write_interval_crop_parts(
                 "crop_image_deleted_after_preview": False,
                 "local_crop_bbox": crop_bbox,
                 "local_crop_basis": crop_basis,
+                "local_crop_interval_y_end": interval_y_end,
                 "included_row_ids": row_ids,
                 "source_page_crop_bbox": source_page_bbox(crop_bbox, block.page_bbox),
                 "stream_y_start": overlap[0],
@@ -1031,6 +1034,20 @@ def next_set_header(
     return None
 
 
+def derive_end_from_assigned_rows(
+    rows: list[StreamRow],
+    interval_start: float,
+    boundary_limit: float,
+) -> tuple[float, str | None, str | None, str]:
+    assigned_rows = rows_in_interval(rows, interval_start, boundary_limit)
+    if not assigned_rows:
+        return boundary_limit, None, None, "fallback-boundary-limit-no-assigned-row"
+
+    end_row = max(assigned_rows, key=lambda row: (row.stream_y_end, row.stream_y_start, row.row_id))
+    end_y = min(boundary_limit, max(interval_start + 1, end_row.stream_y_end))
+    return end_y, f"end_{end_row.row_id}", end_row.text, "current-question-last-assigned-row"
+
+
 def save_candidate_crops(
     *,
     run_dir: Path,
@@ -1097,47 +1114,55 @@ def save_candidate_crops(
     for anchor in selected_anchors:
         interval_start = anchor.stream_y_start
         set_header = containing_set_header(selected_set_headers, anchor)
-        interval_end = stream_end
-        boundary_end_reason = "fallback-stream-end"
-        end_anchor_id: str | None = None
-        end_anchor_text: str | None = None
+        boundary_limit = stream_end
+        boundary_limit_reason = "fallback-stream-end"
+        boundary_limit_anchor_id: str | None = None
+        boundary_limit_anchor_text: str | None = None
 
         if set_header is not None and anchor.question_number < set_header.end_question:
             next_in_set = anchors_by_question.get(anchor.question_number + 1)
             if next_in_set is not None and next_in_set.stream_y_start > interval_start:
-                interval_end = next_in_set.stream_y_start
-                boundary_end_reason = "next-question-anchor-in-set"
-                end_anchor_id = next_in_set.anchor_id
-                end_anchor_text = next_in_set.text
+                boundary_limit = next_in_set.stream_y_start
+                boundary_limit_reason = "next-question-anchor-in-set"
+                boundary_limit_anchor_id = next_in_set.anchor_id
+                boundary_limit_anchor_text = next_in_set.text
             else:
                 following_anchor = next_question_anchor(selected_anchors, anchor)
                 if following_anchor is not None:
-                    interval_end = following_anchor.stream_y_start
-                    boundary_end_reason = "fallback-next-selected-question-anchor"
-                    end_anchor_id = following_anchor.anchor_id
-                    end_anchor_text = following_anchor.text
+                    boundary_limit = following_anchor.stream_y_start
+                    boundary_limit_reason = "fallback-next-selected-question-anchor"
+                    boundary_limit_anchor_id = following_anchor.anchor_id
+                    boundary_limit_anchor_text = following_anchor.text
         elif set_header is not None and anchor.question_number == set_header.end_question:
             following_set = next_set_header(selected_set_headers, set_header)
             if following_set is not None and following_set.stream_y_start > interval_start:
-                interval_end = following_set.stream_y_start
-                boundary_end_reason = "next-set-header-anchor"
-                end_anchor_id = following_set.anchor_id
-                end_anchor_text = following_set.text
+                boundary_limit = following_set.stream_y_start
+                boundary_limit_reason = "next-set-header-anchor"
+                boundary_limit_anchor_id = following_set.anchor_id
+                boundary_limit_anchor_text = following_set.text
             else:
                 following_anchor = next_question_anchor(selected_anchors, anchor)
                 if following_anchor is not None:
-                    interval_end = following_anchor.stream_y_start
-                    boundary_end_reason = "fallback-next-selected-question-anchor"
-                    end_anchor_id = following_anchor.anchor_id
-                    end_anchor_text = following_anchor.text
+                    boundary_limit = following_anchor.stream_y_start
+                    boundary_limit_reason = "fallback-next-selected-question-anchor"
+                    boundary_limit_anchor_id = following_anchor.anchor_id
+                    boundary_limit_anchor_text = following_anchor.text
         else:
             following_anchor = next_question_anchor(selected_anchors, anchor)
             if following_anchor is not None:
-                interval_end = following_anchor.stream_y_start
-                boundary_end_reason = "no-set-header-next-question-anchor"
-                end_anchor_id = following_anchor.anchor_id
-                end_anchor_text = following_anchor.text
+                boundary_limit = following_anchor.stream_y_start
+                boundary_limit_reason = "no-set-header-next-question-anchor"
+                boundary_limit_anchor_id = following_anchor.anchor_id
+                boundary_limit_anchor_text = following_anchor.text
 
+        if boundary_limit <= interval_start:
+            continue
+
+        interval_end, end_anchor_id, end_anchor_text, boundary_end_reason = derive_end_from_assigned_rows(
+            rows,
+            interval_start,
+            boundary_limit,
+        )
         if interval_end <= interval_start:
             continue
 
@@ -1168,7 +1193,12 @@ def save_candidate_crops(
                 "start_anchor_text": anchor.text,
                 "end_anchor_id": end_anchor_id,
                 "end_anchor_text": end_anchor_text,
+                "end_anchor_type": "derived_current_question_end_row" if end_anchor_id else None,
                 "boundary_end_reason": boundary_end_reason,
+                "boundary_limit_reason": boundary_limit_reason,
+                "boundary_limit_anchor_id": boundary_limit_anchor_id,
+                "boundary_limit_anchor_text": boundary_limit_anchor_text,
+                "boundary_limit_stream_y": boundary_limit,
                 "stream_y_start": interval_start,
                 "stream_y_end": interval_end,
                 "crosses_blocks": len({part["block_id"] for part in parts}) > 1,
