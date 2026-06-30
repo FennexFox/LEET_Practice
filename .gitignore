@@ -1,5 +1,6 @@
 # ChatGPT local operation receipts
 .chatgpt/
+.serena/
 
 # Python
 __pycache__/
