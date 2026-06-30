@@ -98,6 +98,24 @@ after the stitched preview is created unless `--keep-crop-part-images` is used.
 The candidates are not verified question text and should not be copied into
 `data/canonical/` without review.
 
+### `data/verification/`
+
+Human verification drafts created from crop-suggestion runs.
+
+Example:
+
+```text
+data/verification/leet-2026-verbal-even/
+  crop-review-state.json
+  verified_passages.jsonl
+  verified_questions.jsonl
+```
+
+This directory is the staging area between OCR/crop suggestions and canonical
+exam data. It may contain official text, so it is ignored by Git by default.
+See [`docs/verification-workbench.md`](verification-workbench.md) for the
+planned review interface.
+
 ### `data/canonical/`
 
 Verified exam/question data. This may still contain official question text, so it is ignored by Git by default.

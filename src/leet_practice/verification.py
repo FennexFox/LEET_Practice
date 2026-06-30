@@ -1,0 +1,779 @@
+"""Human verification workflow for OCR crop suggestions."""
+
+from __future__ import annotations
+
+import json
+import mimetypes
+import re
+import webbrowser
+from datetime import datetime
+from enum import StrEnum
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+from urllib.parse import unquote, urlparse
+
+from pydantic import BaseModel, Field, ValidationError, field_validator
+
+from leet_practice.models import Choice, TextStatus
+
+
+class VerificationError(RuntimeError):
+    """Raised when verification data is invalid."""
+
+
+class ReviewStatus(StrEnum):
+    """Review status for a crop suggestion."""
+
+    UNREVIEWED = "unreviewed"
+    ACCEPTED = "accepted"
+    NEEDS_FIX = "needs_fix"
+    REJECTED = "rejected"
+
+
+class CandidateType(StrEnum):
+    """Normalized candidate type."""
+
+    PASSAGE = "passage"
+    QUESTION = "question"
+
+
+class ReviewCandidate(BaseModel):
+    """One candidate item in the human review queue."""
+
+    candidate_id: str
+    suggestion_id: str
+    candidate_type: CandidateType
+    status: ReviewStatus = ReviewStatus.UNREVIEWED
+    question_number: int | None = Field(default=None, gt=0)
+    start_question: int | None = Field(default=None, gt=0)
+    end_question: int | None = Field(default=None, gt=0)
+    preview_path: str | None = None
+    raw_ocr_text: str = ""
+    verified_text: str = ""
+    stem: str = ""
+    choices: list[str] = Field(default_factory=lambda: ["", "", "", "", ""])
+    correct_answer: int | None = Field(default=None, ge=1, le=5)
+    passage_id: str | None = None
+    notes: str = ""
+    provenance: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("choices")
+    @classmethod
+    def normalize_choices(cls, value: list[str]) -> list[str]:
+        normalized = [str(item) for item in value]
+        if len(normalized) < 5:
+            normalized.extend([""] * (5 - len(normalized)))
+        return normalized[:5]
+
+
+class ReviewState(BaseModel):
+    """Persistent state for a crop-review session."""
+
+    exam_id: str
+    suggestions_path: str
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+    candidates: list[ReviewCandidate] = Field(default_factory=list)
+
+
+class VerifiedPassageDraft(BaseModel):
+    """Accepted passage draft staged before canonical promotion."""
+
+    id: str
+    exam_id: str
+    passage_no: int = Field(gt=0)
+    question_range: tuple[int, int]
+    body_text: str
+    text_status: TextStatus = TextStatus.VERIFIED
+    source_provenance: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("question_range")
+    @classmethod
+    def validate_question_range(cls, value: tuple[int, int]) -> tuple[int, int]:
+        start, end = value
+        if start <= 0 or end < start:
+            raise ValueError("question_range must be positive and ordered")
+        return value
+
+
+class VerifiedQuestionDraft(BaseModel):
+    """Accepted question draft staged before canonical promotion."""
+
+    id: str
+    exam_id: str
+    question_no: int = Field(gt=0)
+    passage_id: str | None = None
+    stem: str
+    choices: list[Choice]
+    correct_answer: int = Field(ge=1, le=5)
+    text_status: TextStatus = TextStatus.VERIFIED
+    source_provenance: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("choices")
+    @classmethod
+    def require_five_choices(cls, value: list[Choice]) -> list[Choice]:
+        if len(value) != 5:
+            raise ValueError("questions must have exactly five choices")
+        return value
+
+
+def verification_dir(exam_id: str, *, data_root: Path = Path("data")) -> Path:
+    return data_root / "verification" / exam_id
+
+
+def canonical_dir(exam_id: str, *, data_root: Path = Path("data")) -> Path:
+    return data_root / "canonical" / exam_id
+
+
+def review_state_path(exam_id: str, *, data_root: Path = Path("data")) -> Path:
+    return verification_dir(exam_id, data_root=data_root) / "crop-review-state.json"
+
+
+def passage_drafts_path(exam_id: str, *, data_root: Path = Path("data")) -> Path:
+    return verification_dir(exam_id, data_root=data_root) / "verified_passages.jsonl"
+
+
+def question_drafts_path(exam_id: str, *, data_root: Path = Path("data")) -> Path:
+    return verification_dir(exam_id, data_root=data_root) / "verified_questions.jsonl"
+
+
+def _now() -> datetime:
+    return datetime.now()
+
+
+def _read_json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _write_jsonl(path: Path, rows: list[BaseModel]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = "\n".join(row.model_dump_json() for row in rows)
+    path.write_text((text + "\n") if text else "", encoding="utf-8")
+
+
+def _slug(value: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip())
+    return slug.strip("_") or "candidate"
+
+
+def _resolve_artifact_path(raw_path: str | None, suggestions_dir: Path) -> str | None:
+    if not raw_path:
+        return None
+    path = Path(raw_path)
+    if path.is_absolute():
+        return str(path.resolve())
+    if path.exists():
+        return str(path.resolve())
+    candidate = suggestions_dir / path
+    if candidate.exists():
+        path = candidate
+    else:
+        path = suggestions_dir / path
+    return str(path.resolve())
+
+
+def _candidate_type(kind: str) -> CandidateType | None:
+    if "passage" in kind:
+        return CandidateType.PASSAGE
+    if "question" in kind:
+        return CandidateType.QUESTION
+    return None
+
+
+def _row_indices(row_ids: list[Any]) -> set[int]:
+    indices: set[int] = set()
+    for row_id in row_ids:
+        match = re.search(r"_r(\d+)$", str(row_id))
+        if match:
+            indices.add(int(match.group(1)))
+    return indices
+
+
+def _ocr_json_path_for_part(part: dict[str, Any], suggestions_dir: Path) -> Path:
+    page = int(part["page"])
+    column = str(part["column"])
+    return suggestions_dir / f"page_{page:03d}_{column}.paddleocr.json"
+
+
+def collect_raw_ocr_text(candidate: dict[str, Any], suggestions_dir: Path) -> str:
+    """Collect compact OCR text for the rows included in candidate crop parts."""
+
+    lines: list[str] = []
+    seen: set[tuple[Path, int]] = set()
+    for part in candidate.get("parts") or []:
+        if not isinstance(part, dict):
+            continue
+        try:
+            ocr_path = _ocr_json_path_for_part(part, suggestions_dir)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not ocr_path.exists():
+            continue
+        row_indices = _row_indices(list(part.get("included_row_ids") or []))
+        if not row_indices:
+            continue
+        payload = _read_json(ocr_path)
+        rows = payload.get("rows") or []
+        for row in rows:
+            row_index = row.get("row_index")
+            if row_index not in row_indices or (ocr_path, row_index) in seen:
+                continue
+            seen.add((ocr_path, row_index))
+            text = str(row.get("text") or "").strip()
+            if text:
+                lines.append(text)
+    return "\n".join(lines)
+
+
+def passage_id_for(exam_id: str, start_question: int, end_question: int) -> str:
+    return f"{exam_id}-passage-{start_question:03d}-{end_question:03d}"
+
+
+def question_id_for(exam_id: str, question_no: int) -> str:
+    return f"{exam_id}-q{question_no:03d}"
+
+
+def parse_suggestions(exam_id: str, suggestions_path: Path) -> ReviewState:
+    """Parse a crop-suggestion artifact into a review state."""
+
+    suggestions_path = suggestions_path.resolve()
+    payload = _read_json(suggestions_path)
+    suggestions_dir = suggestions_path.parent
+    candidates: list[ReviewCandidate] = []
+    for index, item in enumerate(payload.get("suggestions") or [], start=1):
+        if not isinstance(item, dict):
+            continue
+        normalized_type = _candidate_type(str(item.get("kind") or ""))
+        if normalized_type is None:
+            continue
+        suggestion_id = str(item.get("suggestion_id") or f"candidate_{index:03d}")
+        start_question = item.get("start_question") or item.get("set_start_question")
+        end_question = item.get("end_question") or item.get("set_end_question")
+        passage_id = None
+        if normalized_type == CandidateType.QUESTION and start_question and end_question:
+            passage_id = passage_id_for(exam_id, int(start_question), int(end_question))
+        candidates.append(
+            ReviewCandidate(
+                candidate_id=_slug(suggestion_id),
+                suggestion_id=suggestion_id,
+                candidate_type=normalized_type,
+                question_number=item.get("question_number"),
+                start_question=start_question,
+                end_question=end_question,
+                preview_path=_resolve_artifact_path(item.get("candidate_preview_path"), suggestions_dir),
+                raw_ocr_text=collect_raw_ocr_text(item, suggestions_dir),
+                passage_id=passage_id,
+                provenance={
+                    "suggestions_path": str(suggestions_path),
+                    "original": item,
+                },
+            )
+        )
+    return ReviewState(
+        exam_id=exam_id,
+        suggestions_path=str(suggestions_path),
+        candidates=candidates,
+    )
+
+
+def load_review_state(exam_id: str, *, data_root: Path = Path("data")) -> ReviewState:
+    path = review_state_path(exam_id, data_root=data_root)
+    if not path.exists():
+        raise VerificationError(f"Review state does not exist: {path}")
+    return ReviewState.model_validate(_read_json(path))
+
+
+def save_review_state(state: ReviewState, *, data_root: Path = Path("data")) -> Path:
+    state.updated_at = _now()
+    path = review_state_path(state.exam_id, data_root=data_root)
+    _write_json(path, state.model_dump(mode="json"))
+    return path
+
+
+def initialize_review_state(
+    exam_id: str,
+    suggestions_path: Path,
+    *,
+    data_root: Path = Path("data"),
+    overwrite: bool = False,
+) -> ReviewState:
+    """Create or load review state for a suggestions file."""
+
+    path = review_state_path(exam_id, data_root=data_root)
+    if path.exists() and not overwrite:
+        return load_review_state(exam_id, data_root=data_root)
+    state = parse_suggestions(exam_id, suggestions_path)
+    save_review_state(state, data_root=data_root)
+    write_verified_drafts(state, data_root=data_root)
+    return state
+
+
+def _candidate_by_id(state: ReviewState, candidate_id: str) -> ReviewCandidate:
+    for candidate in state.candidates:
+        if candidate.candidate_id == candidate_id:
+            return candidate
+    raise VerificationError(f"Unknown candidate: {candidate_id}")
+
+
+def update_candidate(
+    exam_id: str,
+    candidate_id: str,
+    updates: dict[str, Any],
+    *,
+    data_root: Path = Path("data"),
+) -> ReviewCandidate:
+    """Apply UI updates to one candidate and rewrite staged drafts."""
+
+    state = load_review_state(exam_id, data_root=data_root)
+    candidate = _candidate_by_id(state, candidate_id)
+    allowed = {
+        "status",
+        "verified_text",
+        "stem",
+        "choices",
+        "correct_answer",
+        "passage_id",
+        "notes",
+        "question_number",
+        "start_question",
+        "end_question",
+    }
+    patch = candidate.model_dump()
+    for key, value in updates.items():
+        if key in allowed:
+            patch[key] = value
+    updated = ReviewCandidate.model_validate(patch)
+    index = state.candidates.index(candidate)
+    state.candidates[index] = updated
+    build_verified_drafts(state)
+    save_review_state(state, data_root=data_root)
+    write_verified_drafts(state, data_root=data_root)
+    return updated
+
+
+def _passage_draft_from_candidate(exam_id: str, candidate: ReviewCandidate) -> VerifiedPassageDraft | None:
+    if candidate.candidate_type != CandidateType.PASSAGE or candidate.status != ReviewStatus.ACCEPTED:
+        return None
+    if not candidate.start_question or not candidate.end_question:
+        raise VerificationError(f"Accepted passage {candidate.candidate_id} is missing a question range.")
+    body_text = candidate.verified_text.strip()
+    if not body_text:
+        raise VerificationError(f"Accepted passage {candidate.candidate_id} is missing verified text.")
+    return VerifiedPassageDraft(
+        id=passage_id_for(exam_id, candidate.start_question, candidate.end_question),
+        exam_id=exam_id,
+        passage_no=candidate.start_question,
+        question_range=(candidate.start_question, candidate.end_question),
+        body_text=body_text,
+        source_provenance=candidate.provenance,
+    )
+
+
+def _question_draft_from_candidate(exam_id: str, candidate: ReviewCandidate) -> VerifiedQuestionDraft | None:
+    if candidate.candidate_type != CandidateType.QUESTION or candidate.status != ReviewStatus.ACCEPTED:
+        return None
+    if not candidate.question_number:
+        raise VerificationError(f"Accepted question {candidate.candidate_id} is missing a question number.")
+    if candidate.correct_answer is None:
+        raise VerificationError(f"Accepted question {candidate.candidate_id} is missing a correct answer.")
+    stem = (candidate.stem or candidate.verified_text).strip()
+    if not stem:
+        raise VerificationError(f"Accepted question {candidate.candidate_id} is missing verified text.")
+    choices = [
+        Choice(choice_no=index, text=text.strip(), is_correct=index == candidate.correct_answer)
+        for index, text in enumerate(candidate.choices, start=1)
+    ]
+    return VerifiedQuestionDraft(
+        id=question_id_for(exam_id, candidate.question_number),
+        exam_id=exam_id,
+        question_no=candidate.question_number,
+        passage_id=candidate.passage_id,
+        stem=stem,
+        choices=choices,
+        correct_answer=candidate.correct_answer,
+        source_provenance=candidate.provenance,
+    )
+
+
+def build_verified_drafts(state: ReviewState) -> tuple[list[VerifiedPassageDraft], list[VerifiedQuestionDraft]]:
+    passages: list[VerifiedPassageDraft] = []
+    questions: list[VerifiedQuestionDraft] = []
+    for candidate in state.candidates:
+        passage = _passage_draft_from_candidate(state.exam_id, candidate)
+        if passage is not None:
+            passages.append(passage)
+        question = _question_draft_from_candidate(state.exam_id, candidate)
+        if question is not None:
+            questions.append(question)
+    return passages, questions
+
+
+def write_verified_drafts(state: ReviewState, *, data_root: Path = Path("data")) -> tuple[Path, Path]:
+    passages, questions = build_verified_drafts(state)
+    passage_path = passage_drafts_path(state.exam_id, data_root=data_root)
+    question_path = question_drafts_path(state.exam_id, data_root=data_root)
+    _write_jsonl(passage_path, passages)
+    _write_jsonl(question_path, questions)
+    return passage_path, question_path
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError as exc:
+            raise VerificationError(f"Invalid JSONL at {path}:{line_no}") from exc
+    return rows
+
+
+def load_verified_drafts(
+    exam_id: str,
+    *,
+    data_root: Path = Path("data"),
+) -> tuple[list[VerifiedPassageDraft], list[VerifiedQuestionDraft]]:
+    try:
+        passages = [VerifiedPassageDraft.model_validate(row) for row in _read_jsonl(passage_drafts_path(exam_id, data_root=data_root))]
+        questions = [VerifiedQuestionDraft.model_validate(row) for row in _read_jsonl(question_drafts_path(exam_id, data_root=data_root))]
+    except ValidationError as exc:
+        raise VerificationError(str(exc)) from exc
+    return passages, questions
+
+
+def validate_promotion(passages: list[VerifiedPassageDraft], questions: list[VerifiedQuestionDraft]) -> None:
+    errors: list[str] = []
+    passage_ids = {passage.id for passage in passages}
+    question_numbers: set[int] = set()
+    for passage in passages:
+        if not passage.source_provenance:
+            errors.append(f"Passage {passage.id} is missing source provenance.")
+    for question in questions:
+        if question.question_no in question_numbers:
+            errors.append(f"Duplicate question number: {question.question_no}.")
+        question_numbers.add(question.question_no)
+        if len(question.choices) != 5:
+            errors.append(f"Question {question.question_no} must have exactly five choices.")
+        if any(not (choice.text or "").strip() for choice in question.choices):
+            errors.append(f"Question {question.question_no} has an empty choice.")
+        if not 1 <= question.correct_answer <= 5:
+            errors.append(f"Question {question.question_no} has an invalid correct answer.")
+        if question.passage_id and question.passage_id not in passage_ids:
+            errors.append(f"Question {question.question_no} links to missing passage {question.passage_id}.")
+        if not question.source_provenance:
+            errors.append(f"Question {question.question_no} is missing source provenance.")
+    if errors:
+        raise VerificationError("\n".join(errors))
+
+
+def promote_verified(exam_id: str, *, data_root: Path = Path("data")) -> tuple[Path, Path, int, int]:
+    passages, questions = load_verified_drafts(exam_id, data_root=data_root)
+    validate_promotion(passages, questions)
+    out_dir = canonical_dir(exam_id, data_root=data_root)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    passage_path = out_dir / "passages.jsonl"
+    question_path = out_dir / "questions.jsonl"
+    _write_jsonl(passage_path, passages)
+    _write_jsonl(question_path, questions)
+    return passage_path, question_path, len(passages), len(questions)
+
+
+def _json_response(handler: BaseHTTPRequestHandler, payload: Any, status: HTTPStatus = HTTPStatus.OK) -> None:
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    handler.send_response(status)
+    handler.send_header("Content-Type", "application/json; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def _text_response(
+    handler: BaseHTTPRequestHandler,
+    body: str,
+    *,
+    status: HTTPStatus = HTTPStatus.OK,
+    content_type: str = "text/html; charset=utf-8",
+) -> None:
+    data = body.encode("utf-8")
+    handler.send_response(status)
+    handler.send_header("Content-Type", content_type)
+    handler.send_header("Content-Length", str(len(data)))
+    handler.end_headers()
+    handler.wfile.write(data)
+
+
+def workbench_html() -> str:
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LEET Verification Workbench</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; background: #f5f5f2; color: #202124; }
+    header { height: 48px; display: flex; align-items: center; gap: 12px; padding: 0 16px; background: #263238; color: #fff; }
+    main { display: grid; grid-template-columns: 280px minmax(340px, 1fr) 380px; height: calc(100vh - 48px); }
+    aside, section { min-width: 0; overflow: auto; }
+    aside { border-right: 1px solid #d0d0cc; background: #fff; }
+    .filters { display: flex; gap: 6px; flex-wrap: wrap; padding: 10px; border-bottom: 1px solid #e0e0dc; }
+    button, select, input, textarea { font: inherit; }
+    button { border: 1px solid #9aa0a6; background: #fff; border-radius: 6px; padding: 6px 9px; cursor: pointer; }
+    button.active { background: #2f5d62; color: #fff; border-color: #2f5d62; }
+    .candidate { width: 100%; text-align: left; border: 0; border-bottom: 1px solid #eee; border-radius: 0; padding: 10px; }
+    .candidate strong { display: block; }
+    .candidate span { color: #5f6368; font-size: 12px; }
+    .source { padding: 14px; background: #ebe9e2; }
+    .source img { max-width: 100%; transform-origin: top left; background: white; border: 1px solid #d0d0cc; }
+    .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+    .editor { border-left: 1px solid #d0d0cc; background: #fff; padding: 14px; }
+    label { display: block; font-size: 12px; color: #5f6368; margin: 10px 0 4px; }
+    textarea { width: 100%; min-height: 86px; resize: vertical; }
+    input, select { width: 100%; padding: 6px; }
+    .choices { display: grid; gap: 6px; }
+    .status { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 12px; }
+    .hidden { display: none; }
+    .field-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    pre { white-space: pre-wrap; background: #f1f3f4; padding: 8px; border-radius: 6px; max-height: 160px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <header><strong>LEET Verification Workbench</strong><span id="exam"></span></header>
+  <main>
+    <aside>
+      <div class="filters" id="filters"></div>
+      <div id="queue"></div>
+    </aside>
+    <section class="source">
+      <div class="toolbar">
+        <button id="zoomOut">-</button><button id="zoomIn">+</button><span id="title"></span>
+      </div>
+      <img id="preview" alt="candidate preview">
+    </section>
+    <section class="editor">
+      <label>Status</label><select id="status"></select>
+      <div id="passageFields">
+        <label>Passage body</label><textarea id="verified_text"></textarea>
+      </div>
+      <div id="questionFields">
+        <label>Question stem</label><textarea id="stem"></textarea>
+        <div class="choices" id="choices"></div>
+        <label>Correct answer</label><input id="correct_answer" type="number" min="1" max="5">
+        <label>Passage ID</label><input id="passage_id">
+      </div>
+      <label>Notes</label><textarea id="notes"></textarea>
+      <div class="status"><button id="save">Save</button><button id="next">Next</button></div>
+      <div class="field-head"><label>Raw OCR</label><button id="copyRaw" type="button">Copy</button></div><pre id="raw"></pre>
+      <label>Provenance</label><pre id="prov"></pre>
+    </section>
+  </main>
+  <script>
+    const statuses = ["unreviewed", "accepted", "needs_fix", "rejected"];
+    let state, current, filter = "all", zoom = 1;
+    async function load() {
+      state = await fetch("/api/state").then(r => r.json());
+      document.getElementById("exam").textContent = state.exam_id;
+      renderFilters(); renderQueue();
+      select(state.candidates[0]?.candidate_id);
+    }
+    function renderFilters() {
+      const box = document.getElementById("filters"); box.innerHTML = "";
+      ["all", ...statuses].forEach(s => {
+        const b = document.createElement("button"); b.textContent = s; b.className = filter === s ? "active" : "";
+        b.onclick = () => { filter = s; renderFilters(); renderQueue(); };
+        box.appendChild(b);
+      });
+    }
+    function renderQueue() {
+      const q = document.getElementById("queue"); q.innerHTML = "";
+      state.candidates.filter(c => filter === "all" || c.status === filter).forEach(c => {
+        const b = document.createElement("button"); b.className = "candidate";
+        b.innerHTML = `<strong>${c.suggestion_id}</strong><span>${c.candidate_type} · ${c.status}</span>`;
+        b.onclick = () => select(c.candidate_id); q.appendChild(b);
+      });
+    }
+    function setChoices(values) {
+      const box = document.getElementById("choices"); box.innerHTML = "";
+      for (let i = 0; i < 5; i++) {
+        const input = document.createElement("input"); input.id = `choice_${i}`; input.placeholder = `Choice ${i + 1}`;
+        input.value = values?.[i] || ""; box.appendChild(input);
+      }
+    }
+    function setPanelMode(candidate) {
+      const isPassage = candidate?.candidate_type === "passage";
+      document.getElementById("passageFields").classList.toggle("hidden", !isPassage);
+      document.getElementById("questionFields").classList.toggle("hidden", isPassage);
+    }
+    function select(id) {
+      current = state.candidates.find(c => c.candidate_id === id); if (!current) return;
+      setPanelMode(current);
+      document.getElementById("title").textContent = current.suggestion_id;
+      document.getElementById("preview").src = `/preview/${encodeURIComponent(current.candidate_id)}`;
+      document.getElementById("status").innerHTML = statuses.map(s => `<option value="${s}">${s}</option>`).join("");
+      document.getElementById("status").value = current.status;
+      ["verified_text", "stem", "correct_answer", "passage_id", "notes"].forEach(id => document.getElementById(id).value = current[id] || "");
+      setChoices(current.choices);
+      document.getElementById("raw").textContent = current.raw_ocr_text || "";
+      document.getElementById("prov").textContent = JSON.stringify(current.provenance, null, 2);
+    }
+    async function save() {
+      if (!current) return;
+      let body = {
+        status: document.getElementById("status").value,
+        notes: document.getElementById("notes").value
+      };
+      if (current.candidate_type === "passage") {
+        body = {
+          ...body,
+          verified_text: document.getElementById("verified_text").value
+        };
+      } else {
+        body = {
+          ...body,
+          stem: document.getElementById("stem").value,
+          choices: [0,1,2,3,4].map(i => document.getElementById(`choice_${i}`).value),
+          correct_answer: document.getElementById("correct_answer").value ? Number(document.getElementById("correct_answer").value) : null,
+          passage_id: document.getElementById("passage_id").value || null
+        };
+      }
+      await fetch(`/api/candidates/${encodeURIComponent(current.candidate_id)}`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+      await load(); select(current.candidate_id);
+    }
+    document.getElementById("save").onclick = save;
+    document.getElementById("next").onclick = () => {
+      const list = state.candidates; const i = list.findIndex(c => c.candidate_id === current?.candidate_id);
+      select(list[(i + 1) % list.length]?.candidate_id);
+    };
+    document.getElementById("zoomIn").onclick = () => { zoom += 0.1; document.getElementById("preview").style.transform = `scale(${zoom})`; };
+    document.getElementById("zoomOut").onclick = () => { zoom = Math.max(0.3, zoom - 0.1); document.getElementById("preview").style.transform = `scale(${zoom})`; };
+    document.getElementById("copyRaw").onclick = async () => {
+      const text = document.getElementById("raw").textContent || "";
+      const button = document.getElementById("copyRaw");
+      const temp = document.createElement("textarea");
+      temp.value = text;
+      temp.setAttribute("readonly", "");
+      temp.style.position = "fixed";
+      temp.style.left = "-9999px";
+      document.body.appendChild(temp);
+      temp.select();
+      document.execCommand("copy");
+      temp.remove();
+      button.textContent = "Copied";
+      setTimeout(() => { button.textContent = "Copy"; }, 900);
+    };
+    load();
+  </script>
+</body>
+</html>"""
+
+
+class VerificationWorkbench:
+    """Local HTTP workbench server wrapper."""
+
+    def __init__(self, exam_id: str, *, data_root: Path = Path("data")) -> None:
+        self.exam_id = exam_id
+        self.data_root = data_root
+
+    def handler_class(self) -> type[BaseHTTPRequestHandler]:
+        workbench = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+                return
+
+            def do_GET(self) -> None:
+                parsed = urlparse(self.path)
+                if parsed.path == "/":
+                    _text_response(self, workbench_html())
+                    return
+                if parsed.path == "/api/state":
+                    state = load_review_state(workbench.exam_id, data_root=workbench.data_root)
+                    _json_response(self, state.model_dump(mode="json"))
+                    return
+                if parsed.path.startswith("/preview/"):
+                    candidate_id = unquote(parsed.path.removeprefix("/preview/"))
+                    workbench.serve_preview(self, candidate_id)
+                    return
+                _json_response(self, {"error": "not found"}, HTTPStatus.NOT_FOUND)
+
+            def do_POST(self) -> None:
+                parsed = urlparse(self.path)
+                if parsed.path.startswith("/api/candidates/"):
+                    candidate_id = unquote(parsed.path.removeprefix("/api/candidates/"))
+                    length = int(self.headers.get("Content-Length") or 0)
+                    body = self.rfile.read(length).decode("utf-8")
+                    try:
+                        payload = json.loads(body) if body else {}
+                        candidate = update_candidate(
+                            workbench.exam_id,
+                            candidate_id,
+                            payload,
+                            data_root=workbench.data_root,
+                        )
+                    except (json.JSONDecodeError, ValidationError, VerificationError) as exc:
+                        _json_response(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                        return
+                    _json_response(self, candidate.model_dump(mode="json"))
+                    return
+                _json_response(self, {"error": "not found"}, HTTPStatus.NOT_FOUND)
+
+        return Handler
+
+    def serve_preview(self, handler: BaseHTTPRequestHandler, candidate_id: str) -> None:
+        state = load_review_state(self.exam_id, data_root=self.data_root)
+        candidate = _candidate_by_id(state, candidate_id)
+        if not candidate.preview_path:
+            _json_response(handler, {"error": "candidate has no preview"}, HTTPStatus.NOT_FOUND)
+            return
+        path = Path(candidate.preview_path).resolve()
+        allowed = {Path(item.preview_path).resolve() for item in state.candidates if item.preview_path}
+        if path not in allowed or not path.exists():
+            _json_response(handler, {"error": "preview not found"}, HTTPStatus.NOT_FOUND)
+            return
+        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        data = path.read_bytes()
+        handler.send_response(HTTPStatus.OK)
+        handler.send_header("Content-Type", content_type)
+        handler.send_header("Content-Length", str(len(data)))
+        handler.end_headers()
+        handler.wfile.write(data)
+
+
+def create_review_server(
+    exam_id: str,
+    *,
+    data_root: Path = Path("data"),
+    host: str = "127.0.0.1",
+    port: int = 8765,
+) -> ThreadingHTTPServer:
+    workbench = VerificationWorkbench(exam_id, data_root=data_root)
+    return ThreadingHTTPServer((host, port), workbench.handler_class())
+
+
+def serve_review_workbench(
+    exam_id: str,
+    *,
+    data_root: Path = Path("data"),
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    open_browser: bool = True,
+) -> str:
+    server = create_review_server(exam_id, data_root=data_root, host=host, port=port)
+    url = f"http://{server.server_address[0]}:{server.server_address[1]}/"
+    if open_browser:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+    return url

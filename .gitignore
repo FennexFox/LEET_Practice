@@ -41,6 +41,10 @@ data/ocr/**
 !data/ocr/
 !data/ocr/.gitkeep
 
+data/verification/**
+!data/verification/
+!data/verification/.gitkeep
+
 data/canonical/**
 !data/canonical/
 !data/canonical/.gitkeep
