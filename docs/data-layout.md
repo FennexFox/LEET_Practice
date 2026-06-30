@@ -62,7 +62,7 @@ Example:
 
 ```text
 data/ocr/leet-2026-verbal-even/
-  page_001_left.tesseract.txt
+  page_001_left.paddleocr.txt
   page_001_left.paddleocr.json
   q001_ocr_raw.txt
 ```

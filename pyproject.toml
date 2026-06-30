@@ -19,11 +19,10 @@ pdf = [
     "pymupdf>=1.24",
     "pillow>=10.0",
 ]
+# PaddlePaddle runtime is installed separately because CPU/GPU builds use
+# different package names and Windows GPU wheels require a custom index.
 ocr = [
-    "easyocr>=1.7.2",
-    "paddleocr>=3.7.0",
-    "paddlepaddle>=3.3.1",
-    "pytesseract>=0.3.10",
+    "paddleocr>=3.2,<3.8",
 ]
 dev = [
     "pytest>=8.0",

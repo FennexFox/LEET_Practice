@@ -24,14 +24,18 @@ PDF page
 
 ## OCR engine policy
 
-Keep OCR engines interchangeable.
+Keep the OCR pipeline conceptually interchangeable, but keep project dependencies narrow.
 
-Possible engines:
+Selected local OCR engine:
 
-- `tesseract`: available baseline, useful for quick local testing
-- `paddleocr`: likely first serious candidate for Korean OCR
-- `easyocr`: simple comparison candidate
-- commercial OCR: optional later if local OCR is insufficient
+- `paddleocr`: current default for Korean LEET PDF OCR
+
+Removed from project dependencies and the local OCR script:
+
+- `tesseract` / `pytesseract`
+- `easyocr`
+
+Commercial OCR remains an optional later fallback if local OCR is insufficient.
 
 ## Validation criteria
 
