@@ -69,6 +69,35 @@ data/ocr/leet-2026-verbal-even/
 
 OCR output is never treated as final truth. It must be reviewed before becoming verified text.
 
+### `artifacts/question_crop_suggestions/`
+
+Candidate crop-suggestion runs from `tools/suggest_question_crops.py`.
+
+Example:
+
+```text
+artifacts/question_crop_suggestions/20260630-131213/
+  page_001_300dpi.png
+  page_001_left.png
+  page_001_left.paddleocr.json
+  p001_left_annotated.png
+  set_01_03_passage_candidate/
+    part_01_p001_left.png
+    set_01_03_passage_candidate_preview.png
+  q01_candidate/
+    part_01_p001_left.png
+    q01_candidate_preview.png
+  suggestions.json
+```
+
+These are local evidence artifacts. Per-column `*.paddleocr.json` files are
+compact OCR-row/provenance records by default, not full PaddleOCR raw payload
+dumps. `suggestions.json` preserves selected set-header anchors, selected
+question anchors, passage/question candidate separation, page, column,
+source-image, local crop, and source-page crop provenance for every candidate
+part. The candidates are not verified question text and should not be copied
+into `data/canonical/` without review.
+
 ### `data/canonical/`
 
 Verified exam/question data. This may still contain official question text, so it is ignored by Git by default.

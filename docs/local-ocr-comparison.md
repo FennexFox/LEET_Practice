@@ -2,6 +2,9 @@
 
 Use `tools/compare_ocr_engines.py` to run PaddleOCR on LEET page images or rendered PDF pages.
 
+Use `tools/suggest_question_crops.py` for the next automation step: generating
+candidate question crop suggestions from OCR rows in page-column reading order.
+
 ## Install dependencies with uv
 
 Install PDF rendering plus the PaddleOCR Python package:
@@ -73,6 +76,73 @@ manifest.json
 ```
 
 `artifacts/` is ignored by Git.
+
+## Suggest candidate question crops
+
+After PaddleOCR is installed and working, run the question crop suggestion tool
+over a page range:
+
+```powershell
+uv run python tools/suggest_question_crops.py `
+  --pdf "data/raw_pdfs/leet-2026-verbal-even/paper.pdf" `
+  --pages 1-10 `
+  --run-id leet-2026-verbal-even-p001-010 `
+  --paddle-device gpu:0 `
+  --paddle-preimport-paddle
+```
+
+The tool renders each requested page, splits it into left and right content
+blocks, runs PaddleOCR on each block, and builds a virtual reading stream:
+
+```text
+page 1 left -> page 1 right -> page 2 left -> page 2 right -> ...
+```
+
+It then looks for conservative question-number anchors and LEET set-header
+anchors such as `[1~3]`. Set headers are used to emit passage candidates from
+the set header to the first question in that set, and to stop the last question
+in a set at the next set header when possible. When a candidate crosses a
+column or page boundary, the output keeps separate source crop parts and also
+writes a stitched preview image for quick review.
+
+Outputs are written under:
+
+```text
+artifacts/question_crop_suggestions/<timestamp>/
+```
+
+Typical outputs:
+
+```text
+page_001_300dpi.png
+page_001_left.png
+page_001_left.paddleocr.json
+p001_left_annotated.png
+set_01_03_passage_candidate/
+  part_01_p001_left.png
+  set_01_03_passage_candidate_preview.png
+q01_candidate/
+  part_01_p001_left.png
+  q01_candidate_preview.png
+suggestions.json
+```
+
+The per-column `*.paddleocr.json` files are compact by default. They contain
+extracted OCR rows, row bounding boxes, confidence, page/column provenance, OCR
+status, and minimal options, but not PaddleOCR's full raw internal payload. Use
+`--include-raw-paddle-payload` only for short debug runs where the large raw
+payload is intentionally needed.
+
+The tool processes pages incrementally. If a run is interrupted, it writes a
+partial `suggestions.json` for completed OCR blocks when possible and marks it
+with `status: partial_interrupted`. Retry with the same `--run-id`; by default
+`--reuse-existing-images` reuses rendered page and column PNGs already present
+in that run directory.
+
+Every item in `suggestions.json` is labeled as a candidate or suggestion and
+contains provenance back to page, column, source image, local crop coordinates,
+and source-page coordinates. These outputs are evidence for review, not
+verified question text.
 
 ## Test an existing image
 

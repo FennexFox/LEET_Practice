@@ -22,6 +22,46 @@ PDF page
 → store verified text for review
 ```
 
+## Virtual reading stream for crop suggestions
+
+Manual per-question bounding-box storage is not a useful primary strategy for
+LEET problem PDFs because question positions do not repeat reliably across
+years, subjects, or even adjacent pages. Instead, use OCR rows to build a
+candidate reading stream from stable layout blocks:
+
+```text
+page-left content block
+-> page-right content block
+-> next page-left content block
+-> next page-right content block
+```
+
+`tools/suggest_question_crops.py` implements this as a candidate-generation
+step. It renders requested PDF pages, splits each page into left/right columns,
+estimates each column's content box from non-header/footer OCR row boxes, maps
+rows into a continuous `stream_y` coordinate system, and looks for conservative
+question-number anchors plus LEET set-header anchors such as `[1~3]`.
+
+Set-header anchors split the output into passage and question candidates. For a
+set `[a~b]`, the passage candidate runs from the set header to question `a`
+when that question anchor is found. Question candidates normally run from
+question `n` to question `n+1`; the last question in a detected set runs to the
+next set header when available, then falls back to the next selected question
+anchor or stream end. A single candidate can naturally span a column or page
+boundary.
+
+The crop-suggestion tool writes compact per-column OCR JSON by default:
+extracted rows, row bounding boxes, confidence, provenance, OCR status, and
+minimal options. Full raw PaddleOCR payloads are intentionally omitted unless a
+short debug run explicitly uses `--include-raw-paddle-payload`.
+
+This is intentionally not authoritative extraction. OCR may miss a number,
+misread a set header, or mistake another leading number for a question anchor.
+Question-anchor scoring rejects common false positives from choices, inline
+numbered fragments, years, quantities, and header/footer rows, but suggestions
+must still be checked against the emitted source crop images before any text
+moves into review or canonical data.
+
 ## OCR engine policy
 
 Keep the OCR pipeline conceptually interchangeable, but keep project dependencies narrow.
