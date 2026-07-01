@@ -38,6 +38,9 @@ The project is designed around one principle: **the core learning data is not on
 The repository tracks code, schemas, documentation, and empty directory placeholders. It intentionally does **not** track local PDFs, rendered page images, OCR artifacts, extracted copyrighted text, personal attempts, or review notes by default.
 
 See [`docs/data-layout.md`](docs/data-layout.md) for the intended local directory structure.
+See [`docs/verification-workbench.md`](docs/verification-workbench.md) for the
+planned human verification interface that promotes OCR crop suggestions into
+verified passage and question data.
 
 ## Initial directory map
 
@@ -47,6 +50,7 @@ LEET_Practice/
     raw_pdfs/        # local official PDFs; ignored by Git
     rendered_pages/  # local PDF page images; ignored by Git
     ocr/             # local OCR outputs; ignored by Git
+    verification/    # local human verification drafts; ignored by Git by default
     canonical/       # local verified exam/question data; ignored by Git by default
     attempts/        # local attempt records; ignored by Git by default
     reviews/         # local wrong-answer reviews; ignored by Git by default
