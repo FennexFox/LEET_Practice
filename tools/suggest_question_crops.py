@@ -54,11 +54,12 @@ HEADER_FOOTER_EDGE_TEXT_RE = re.compile(
     r"\uCD94\uB9AC|\uB17C\uC99D|\uB17C\uC220|"
     r"\uD640\uC218\uD615|\uC9DD\uC218\uD615|"
     r"\uC131\uBA85|\uC218\uD5D8|\uBC88\uD638|\uC218\uD5D8\uBC88\uD638|\uAD50\uC2DC|"
-    r"\d+\s*\uD638"
+    r"\d+\s*\uD638|\uADF8\uD638"
     r")$"
 )
 HEADER_FOOTER_TOP_EDGE_RATIO = 0.18
 HEADER_FOOTER_BOTTOM_EDGE_RATIO = 0.92
+STANDALONE_NUMBER_TOP_EDGE_RATIO = 0.10
 
 
 @dataclass(frozen=True)
@@ -529,7 +530,11 @@ def classify_excluded_row(text: str, local_bbox: list[int] | None, width: int, h
         near_top = local_bbox[1] <= int(height * HEADER_FOOTER_TOP_EDGE_RATIO)
         near_bottom = local_bbox[3] >= int(height * HEADER_FOOTER_BOTTOM_EDGE_RATIO)
 
-    if re.fullmatch(r"\d{1,3}", stripped) and (near_top or near_bottom):
+    standalone_number_near_top = False
+    if local_bbox is not None:
+        standalone_number_near_top = local_bbox[1] <= int(height * STANDALONE_NUMBER_TOP_EDGE_RATIO)
+
+    if re.fullmatch(r"\d{1,3}", stripped) and (standalone_number_near_top or near_bottom):
         reasons.append("standalone-page-number-at-page-edge")
 
     if (near_top or near_bottom) and HEADER_FOOTER_RE.search(stripped):
@@ -538,7 +543,11 @@ def classify_excluded_row(text: str, local_bbox: list[int] | None, width: int, h
     if (near_top or near_bottom) and HEADER_FOOTER_EDGE_TEXT_RE.fullmatch(stripped):
         reasons.append("short-header-footer-fragment-at-page-edge")
 
-    if (near_top or near_bottom) and re.fullmatch(r"[-\u2013\u2014\s\d]+", stripped):
+    if (
+        (near_top or near_bottom)
+        and not re.fullmatch(r"\d{1,3}", stripped)
+        and re.fullmatch(r"[-\u2013\u2014\s\d]+", stripped)
+    ):
         reasons.append("edge-rule-or-page-marker")
 
     return reasons
