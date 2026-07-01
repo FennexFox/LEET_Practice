@@ -21,6 +21,8 @@ def test_workbench_serves_state_preview_and_updates(tmp_path) -> None:
         assert "LEET Verification Workbench" in root
         assert 'id="passageFields"' in root
         assert 'id="questionFields"' in root
+        assert 'id="question_number"' in root
+        assert 'scheduleAutosave' in root
         assert 'id="copyRaw"' in root
 
         state = json.loads(urllib.request.urlopen(f"{base_url}/api/state", timeout=5).read().decode("utf-8"))

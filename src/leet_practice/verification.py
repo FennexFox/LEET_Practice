@@ -563,9 +563,12 @@ def workbench_html() -> str:
     <section class="editor">
       <label>Status</label><select id="status"></select>
       <div id="passageFields">
+        <label>Start question</label><input id="start_question" type="number" min="1">
+        <label>End question</label><input id="end_question" type="number" min="1">
         <label>Passage body</label><textarea id="verified_text"></textarea>
       </div>
       <div id="questionFields">
+        <label>Question number</label><input id="question_number" type="number" min="1">
         <label>Question stem</label><textarea id="stem"></textarea>
         <div class="choices" id="choices"></div>
         <label>Correct answer</label><input id="correct_answer" type="number" min="1" max="5">
@@ -579,7 +582,7 @@ def workbench_html() -> str:
   </main>
   <script>
     const statuses = ["unreviewed", "accepted", "needs_fix", "rejected"];
-    let state, current, filter = "all", zoom = 1;
+    let state, current, filter = "all", zoom = 1, autosaveTimer;
     async function load() {
       state = await fetch("/api/state").then(r => r.json());
       document.getElementById("exam").textContent = state.exam_id;
@@ -599,6 +602,7 @@ def workbench_html() -> str:
       state.candidates.filter(c => filter === "all" || c.status === filter).forEach(c => {
         const b = document.createElement("button"); b.className = "candidate";
         b.innerHTML = `<strong>${c.suggestion_id}</strong><span>${c.candidate_type} · ${c.status}</span>`;
+        b.querySelector("span").textContent = `${c.candidate_type} - ${c.status}`;
         b.onclick = () => select(c.candidate_id); q.appendChild(b);
       });
     }
@@ -606,7 +610,9 @@ def workbench_html() -> str:
       const box = document.getElementById("choices"); box.innerHTML = "";
       for (let i = 0; i < 5; i++) {
         const input = document.createElement("input"); input.id = `choice_${i}`; input.placeholder = `Choice ${i + 1}`;
-        input.value = values?.[i] || ""; box.appendChild(input);
+        input.value = values?.[i] || "";
+        input.addEventListener("input", scheduleAutosave);
+        box.appendChild(input);
       }
     }
     function setPanelMode(candidate) {
@@ -621,13 +627,23 @@ def workbench_html() -> str:
       document.getElementById("preview").src = `/preview/${encodeURIComponent(current.candidate_id)}`;
       document.getElementById("status").innerHTML = statuses.map(s => `<option value="${s}">${s}</option>`).join("");
       document.getElementById("status").value = current.status;
-      ["verified_text", "stem", "correct_answer", "passage_id", "notes"].forEach(id => document.getElementById(id).value = current[id] || "");
+      ["verified_text", "stem", "correct_answer", "passage_id", "notes", "question_number", "start_question", "end_question"].forEach(id => document.getElementById(id).value = current[id] || "");
       setChoices(current.choices);
       document.getElementById("raw").textContent = current.raw_ocr_text || "";
       document.getElementById("prov").textContent = JSON.stringify(current.provenance, null, 2);
     }
-    async function save() {
+    function numberValue(id) {
+      const value = document.getElementById(id).value;
+      return value ? Number(value) : null;
+    }
+    function scheduleAutosave() {
+      clearTimeout(autosaveTimer);
+      autosaveTimer = setTimeout(() => save({reload: false}), 700);
+    }
+    async function save(options = {}) {
       if (!current) return;
+      const reload = options.reload ?? true;
+      const candidateId = current.candidate_id;
       let body = {
         status: document.getElementById("status").value,
         notes: document.getElementById("notes").value
@@ -635,21 +651,38 @@ def workbench_html() -> str:
       if (current.candidate_type === "passage") {
         body = {
           ...body,
-          verified_text: document.getElementById("verified_text").value
+          verified_text: document.getElementById("verified_text").value,
+          start_question: numberValue("start_question"),
+          end_question: numberValue("end_question")
         };
       } else {
         body = {
           ...body,
+          question_number: numberValue("question_number"),
           stem: document.getElementById("stem").value,
           choices: [0,1,2,3,4].map(i => document.getElementById(`choice_${i}`).value),
-          correct_answer: document.getElementById("correct_answer").value ? Number(document.getElementById("correct_answer").value) : null,
+          correct_answer: numberValue("correct_answer"),
           passage_id: document.getElementById("passage_id").value || null
         };
       }
-      await fetch(`/api/candidates/${encodeURIComponent(current.candidate_id)}`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
-      await load(); select(current.candidate_id);
+      const response = await fetch(`/api/candidates/${encodeURIComponent(candidateId)}`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+      if (!response.ok) return;
+      const updated = await response.json();
+      const index = state.candidates.findIndex(c => c.candidate_id === candidateId);
+      if (index >= 0) state.candidates[index] = updated;
+      current = updated;
+      renderQueue();
+      if (reload) {
+        await load();
+        select(candidateId);
+      }
     }
     document.getElementById("save").onclick = save;
+    ["status", "verified_text", "stem", "correct_answer", "passage_id", "notes", "question_number", "start_question", "end_question"].forEach(id => {
+      const element = document.getElementById(id);
+      element.addEventListener("input", scheduleAutosave);
+      element.addEventListener("change", scheduleAutosave);
+    });
     document.getElementById("next").onclick = () => {
       const list = state.candidates; const i = list.findIndex(c => c.candidate_id === current?.candidate_id);
       select(list[(i + 1) % list.length]?.candidate_id);
