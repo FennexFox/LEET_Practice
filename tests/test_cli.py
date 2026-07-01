@@ -85,6 +85,7 @@ def test_verify_default_suggestions_does_not_match_exam_id_prefix(
     prefix_run = artifacts_root / "leet-2026-verbal-even-p001-001"
     shutil.copytree(suggestion_run.parent, exact_run)
     shutil.copytree(suggestion_run.parent, prefix_run)
+    (prefix_run / "suggestions.json").touch()
     monkeypatch.chdir(tmp_path)
 
     result = CliRunner().invoke(

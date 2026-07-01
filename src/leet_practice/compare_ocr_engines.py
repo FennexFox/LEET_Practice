@@ -162,17 +162,16 @@ def render_pdf_page(pdf_path: Path, page_1based: int, dpi: int, run_dir: Path) -
     if not pdf_path.exists():
         raise FileNotFoundError(pdf_path)
 
-    doc = fitz.open(pdf_path)
     page_index = page_1based - 1
-    if page_index >= len(doc):
-        raise ValueError(f"PDF has {len(doc)} pages, but page {page_1based} was requested.")
-
-    page = doc[page_index]
-    zoom = dpi / 72
-    pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
     out_path = run_dir / f"page_{page_1based:03d}_{dpi}dpi.png"
-    pix.save(out_path)
-    doc.close()
+    with fitz.open(pdf_path) as doc:
+        if page_index >= len(doc):
+            raise ValueError(f"PDF has {len(doc)} pages, but page {page_1based} was requested.")
+
+        page = doc[page_index]
+        zoom = dpi / 72
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+        pix.save(out_path)
     return out_path
 
 

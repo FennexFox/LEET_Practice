@@ -201,8 +201,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--reuse-existing-images",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Reuse rendered page and column PNGs already present in the run directory. Default: true.",
+        default=False,
+        help="Reuse rendered page and column PNGs already present in the run directory. Default: false.",
     )
     parser.add_argument(
         "--no-annotated-blocks",
