@@ -75,6 +75,34 @@ def test_verify_uses_latest_default_suggestions(
     assert "leet-2026-verbal-even-p001-001" in result.output
 
 
+def test_verify_default_suggestions_does_not_match_exam_id_prefix(
+    tmp_path: Path,
+    suggestion_run: Path,
+    monkeypatch,
+) -> None:
+    artifacts_root = tmp_path / "artifacts" / "question_crop_suggestions"
+    exact_run = artifacts_root / "leet-2026-verbal"
+    prefix_run = artifacts_root / "leet-2026-verbal-even-p001-001"
+    shutil.copytree(suggestion_run.parent, exact_run)
+    shutil.copytree(suggestion_run.parent, prefix_run)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "verify",
+            "leet-2026-verbal",
+            "--data-root",
+            str(tmp_path / "data"),
+            "--init-only",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Suggestions:" in result.output
+    assert "leet-2026-verbal-even-p001-001" not in result.output
+
+
 def test_promote_accepts_positional_exam_id(tmp_path: Path, suggestion_run: Path) -> None:
     result = CliRunner().invoke(
         app,
@@ -107,3 +135,29 @@ def test_ocr_defaults_pdf_path_from_exam_id(tmp_path: Path) -> None:
     assert "raw_pdfs" in result.output
     assert "leet-2026-verbal-even" in result.output
     assert "leet-2026-verbal-even.pdf" in result.output
+
+
+def test_ocr_invalid_pages_fails_before_creating_run_dir(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "data" / "raw_pdfs" / "leet-2026-verbal-even.pdf"
+    pdf_path.parent.mkdir(parents=True)
+    pdf_path.write_bytes(b"not a real pdf")
+    out_dir = tmp_path / "artifacts"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "ocr",
+            "leet-2026-verbal-even",
+            "0",
+            "--data-root",
+            str(tmp_path / "data"),
+            "--out-dir",
+            str(out_dir),
+            "--run-id",
+            "should-not-exist",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Invalid PAGES" in result.output
+    assert not (out_dir / "should-not-exist").exists()

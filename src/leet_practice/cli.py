@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import importlib.util
-import re
-import sys
 from ipaddress import ip_address
 from pathlib import Path
-from types import ModuleType
 
 import typer
 from rich.console import Console
 
 from leet_practice import __version__
+from leet_practice import ocr_crops
 from leet_practice.verification import (
     VerificationError,
     initialize_review_state,
@@ -52,11 +49,16 @@ def _default_pdf_path(exam_id: str, data_root: Path) -> Path:
 
 
 def _latest_suggestions_path(exam_id: str, artifacts_root: Path = DEFAULT_ARTIFACTS_ROOT) -> Path:
-    candidates = [
-        path
-        for path in artifacts_root.glob(f"{exam_id}*/suggestions.json")
-        if path.is_file()
-    ]
+    if not artifacts_root.exists():
+        candidates: list[Path] = []
+    else:
+        candidates = [
+            suggestions_path
+            for run_dir in artifacts_root.iterdir()
+            if run_dir.is_dir() and (run_dir.name == exam_id or run_dir.name.startswith(f"{exam_id}-p"))
+            for suggestions_path in [run_dir / "suggestions.json"]
+            if suggestions_path.is_file()
+        ]
     if not candidates:
         console.print(
             f"[red]No suggestions.json found for {exam_id} under {artifacts_root}.[/red]\n"
@@ -65,33 +67,9 @@ def _latest_suggestions_path(exam_id: str, artifacts_root: Path = DEFAULT_ARTIFA
         raise typer.Exit(1)
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
-
-def _load_suggest_question_crops() -> ModuleType:
-    tools_dir = Path(__file__).resolve().parents[2] / "tools"
-    module_path = tools_dir / "suggest_question_crops.py"
-    if not module_path.exists():
-        console.print(f"[red]OCR crop suggestion tool not found:[/red] {module_path}")
-        raise typer.Exit(1)
-    if str(tools_dir) not in sys.path:
-        sys.path.insert(0, str(tools_dir))
-    spec = importlib.util.spec_from_file_location("suggest_question_crops", module_path)
-    if spec is None or spec.loader is None:
-        console.print(f"[red]Failed to load OCR crop suggestion tool:[/red] {module_path}")
-        raise typer.Exit(1)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def _default_run_id(exam_id: str, pages: str, tool: ModuleType) -> str:
-    try:
-        parsed_pages = tool.parse_pages(pages)
-    except ValueError:
-        page_slug = re.sub(r"[^A-Za-z0-9]+", "-", pages).strip("-")
-        return f"{exam_id}-p{page_slug}"
+def _default_run_id(exam_id: str, parsed_pages: list[int]) -> str:
     if not parsed_pages:
-        return f"{exam_id}-p{re.sub(r'[^A-Za-z0-9]+', '-', pages).strip('-')}"
+        return f"{exam_id}-p"
     if parsed_pages == list(range(parsed_pages[0], parsed_pages[-1] + 1)):
         page_part = f"p{parsed_pages[0]:03d}-{parsed_pages[-1]:03d}"
     else:
@@ -134,15 +112,20 @@ def _run_ocr(
     paddle_text_recognition_batch_size: int | None,
     paddle_preimport_paddle: bool,
 ) -> None:
-    tool = _load_suggest_question_crops()
     pdf_path = pdf or _default_pdf_path(exam_id, data_root)
     if not pdf_path.exists():
         console.print(
             f"[red]PDF not found:[/red] {pdf_path}\n"
-            "Pass --pdf explicitly or place the file at data/raw_pdfs/EXAM_ID.pdf."
+            "Pass --pdf explicitly or place the file at the path shown above."
         )
         raise typer.Exit(1)
-    actual_run_id = run_id or _default_run_id(exam_id, pages, tool)
+    try:
+        parsed_pages = ocr_crops.parse_pages(pages)
+    except ValueError as exc:
+        console.print(f"[red]Invalid PAGES:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    actual_run_id = run_id or _default_run_id(exam_id, parsed_pages)
     argv = [
         "--pdf",
         str(pdf_path),
@@ -160,11 +143,11 @@ def _run_ocr(
     if paddle_preimport_paddle:
         argv.append("--paddle-preimport-paddle")
 
-    args = tool.parse_args(argv)
-    run_dir = tool.make_run_dir(args.out_dir, args.run_id)
-    payload = tool.build_stream(args, run_dir)
-    tool.write_suggestions(run_dir, payload)
-    tool.print_summary(run_dir, payload)
+    args = ocr_crops.parse_args(argv)
+    run_dir = ocr_crops.make_run_dir(args.out_dir, args.run_id)
+    payload = ocr_crops.build_stream(args, run_dir)
+    ocr_crops.write_suggestions(run_dir, payload)
+    ocr_crops.print_summary(run_dir, payload)
     if payload.get("interrupted"):
         raise typer.Exit(130)
 
