@@ -84,6 +84,27 @@ def test_parse_suggestions_rejects_preview_paths_outside_run(tmp_path: Path, sug
         initialize_review_state("leet-2026-verbal-even", suggestions_path, data_root=tmp_path / "data")
 
 
+def test_parse_suggestions_accepts_repo_relative_preview_paths(
+    tmp_path: Path,
+    suggestion_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    suggestions_path = suggestion_run
+    payload = json.loads(suggestions_path.read_text(encoding="utf-8"))
+    run_relative = Path("artifacts") / "question_crop_suggestions" / "run"
+    payload["suggestions"][0]["candidate_preview_path"] = str(
+        run_relative / "set_01_03_passage_candidate" / "set_01_03_passage_candidate_preview.png"
+    )
+    payload["suggestions"][1]["candidate_preview_path"] = str(run_relative / "q01_candidate" / "q01_candidate_preview.png")
+    suggestions_path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    state = initialize_review_state("leet-2026-verbal-even", suggestions_path, data_root=tmp_path / "data")
+
+    assert Path(state.candidates[0].preview_path or "").exists()
+    assert Path(state.candidates[1].preview_path or "").exists()
+
+
 def test_passage_range_edit_resyncs_linked_question_passage_ids(tmp_path: Path, suggestion_run: Path) -> None:
     suggestions_path = suggestion_run
     data_root = tmp_path / "data"
@@ -99,3 +120,80 @@ def test_passage_range_edit_resyncs_linked_question_passage_ids(tmp_path: Path, 
     state = load_review_state("leet-2026-verbal-even", data_root=data_root)
     question = next(candidate for candidate in state.candidates if candidate.candidate_id == "q01")
     assert question.passage_id == "leet-2026-verbal-even-passage-001-004"
+
+
+def test_refresh_preserving_edits_keeps_touched_candidates_and_refreshes_untouched(
+    tmp_path: Path,
+    suggestion_run: Path,
+) -> None:
+    suggestions_path = suggestion_run
+    data_root = tmp_path / "data"
+    initialize_review_state("leet-2026-verbal-even", suggestions_path, data_root=data_root)
+    update_candidate(
+        "leet-2026-verbal-even",
+        "set_01_03_passage",
+        {"status": "needs_fix", "verified_text": "Manual passage"},
+        data_root=data_root,
+    )
+    update_candidate(
+        "leet-2026-verbal-even",
+        "q01",
+        {"status": "needs_fix", "notes": "review decision only"},
+        data_root=data_root,
+    )
+
+    payload = json.loads(suggestions_path.read_text(encoding="utf-8"))
+    ocr_path = suggestions_path.parent / "page_001_left.paddleocr.json"
+    ocr_payload = json.loads(ocr_path.read_text(encoding="utf-8"))
+    ocr_payload["rows"][0]["text"] = "new passage OCR"
+    ocr_payload["rows"][1]["text"] = "1. New question?\n1) A\n2) B\n3) C\n4) D\n5) E"
+    ocr_path.write_text(json.dumps(ocr_payload), encoding="utf-8")
+    suggestions_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    state = initialize_review_state(
+        "leet-2026-verbal-even",
+        suggestions_path,
+        data_root=data_root,
+        refresh_preserving_edits=True,
+    )
+
+    passage = next(candidate for candidate in state.candidates if candidate.candidate_id == "set_01_03_passage")
+    question = next(candidate for candidate in state.candidates if candidate.candidate_id == "q01")
+    assert passage.raw_ocr_text == "new passage OCR"
+    assert passage.verified_text == "Manual passage"
+    assert passage.status == ReviewStatus.NEEDS_FIX
+    assert passage.manually_edited is True
+    assert question.raw_ocr_text == "1. New question?\n1) A\n2) B\n3) C\n4) D\n5) E"
+    assert question.stem == "New question?"
+    assert question.choices == ["A", "B", "C", "D", "E"]
+    assert question.status == ReviewStatus.NEEDS_FIX
+    assert question.notes == "review decision only"
+    assert question.manually_edited is False
+
+
+def test_update_candidate_marks_manual_only_when_ocr_text_changes(tmp_path: Path, suggestion_run: Path) -> None:
+    data_root = tmp_path / "data"
+    initialize_review_state("leet-2026-verbal-even", suggestion_run, data_root=data_root)
+
+    status_only = update_candidate(
+        "leet-2026-verbal-even",
+        "q01",
+        {"status": "needs_fix", "notes": "needs another look"},
+        data_root=data_root,
+    )
+    same_text = update_candidate(
+        "leet-2026-verbal-even",
+        "q01",
+        {"stem": status_only.stem},
+        data_root=data_root,
+    )
+    changed_text = update_candidate(
+        "leet-2026-verbal-even",
+        "q01",
+        {"stem": "Manual question"},
+        data_root=data_root,
+    )
+
+    assert status_only.manually_edited is False
+    assert same_text.manually_edited is False
+    assert changed_text.manually_edited is True

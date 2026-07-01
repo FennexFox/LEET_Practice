@@ -31,6 +31,22 @@ leet-practice review-crops `
 Use `--init-only` to create or refresh review state without starting the
 server. Use `--no-open` to start the server without opening a browser.
 
+Use optional local cleanup only when you want OCR draft suggestions to run
+through local helpers during initialization:
+
+```powershell
+leet-practice review-crops `
+  --exam-id leet-2026-verbal-even `
+  --suggestions artifacts/question_crop_suggestions/leet-2026-verbal-even-p001-010/suggestions.json `
+  --enable-spacing-cleanup `
+  --enable-morphology-checks
+```
+
+Spacing cleanup tries local `pykospacing` first, then `korspacing`, and then
+`kiwipiepy` when those packages are installed. Morphology checks also use
+`kiwipiepy` when installed. Missing optional packages are recorded as draft
+warnings instead of blocking review.
+
 The command starts a local server and opens a browser-based review UI by
 default.
 This keeps image inspection and text editing practical without committing to a
@@ -75,6 +91,24 @@ The editor should hide passage-only fields while reviewing questions and hide
 question-only fields while reviewing passages. Raw OCR should be copyable from
 the browser UI for quick manual cleanup.
 
+Editable fields are prefilled from OCR drafts on first initialization:
+
+- passage body starts from the full raw OCR text
+- question stem and choices are split by common markers such as `①` through `⑤`,
+  `1)`, `1.`, and `(1)`
+- forced OCR line breaks are joined in draft fields while Raw OCR keeps the
+  original line breaks
+- obvious missing spaces after punctuation are normalized in draft fields, while
+  numeric values such as `1,000` and `3.14` are preserved
+- numeric choice markers are accepted in sequence from 1, reducing cases where a
+  question number such as `5.` is mistaken for choice 5
+- draft warnings and correction steps are shown in the workbench
+- `Apply OCR draft` explicitly replaces the current editable fields with the OCR
+  draft again
+
+Normal reloads do not overwrite user edits. Reapplying a draft is always an
+explicit reviewer action.
+
 ### Actions
 
 Support these actions:
@@ -83,6 +117,7 @@ Support these actions:
 - `Needs recrop`: candidate is close but needs a manual or adjusted crop
 - `Reject`: candidate should not become data
 - `Save`: persist current edits
+- `Apply OCR draft`: replace editable fields with the latest OCR draft
 - `Next`: move to the next unresolved candidate
 
 Autosave is preferred so the reviewer can move quickly without losing edits.
@@ -136,7 +171,7 @@ data/canonical/leet-2026-verbal-even/
 The important boundary is:
 
 ```text
-OCR/crop suggestion -> human verification -> canonical question bank
+raw OCR -> OCR draft fields -> local cleanup suggestions -> human verification -> canonical question bank
 ```
 
 The review UI is a fast decision and correction tool. `data/canonical/` is for
