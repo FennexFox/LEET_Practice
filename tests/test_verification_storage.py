@@ -84,6 +84,27 @@ def test_parse_suggestions_rejects_preview_paths_outside_run(tmp_path: Path, sug
         initialize_review_state("leet-2026-verbal-even", suggestions_path, data_root=tmp_path / "data")
 
 
+def test_parse_suggestions_accepts_repo_relative_preview_paths(
+    tmp_path: Path,
+    suggestion_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    suggestions_path = suggestion_run
+    payload = json.loads(suggestions_path.read_text(encoding="utf-8"))
+    run_relative = Path("artifacts") / "question_crop_suggestions" / "run"
+    payload["suggestions"][0]["candidate_preview_path"] = str(
+        run_relative / "set_01_03_passage_candidate" / "set_01_03_passage_candidate_preview.png"
+    )
+    payload["suggestions"][1]["candidate_preview_path"] = str(run_relative / "q01_candidate" / "q01_candidate_preview.png")
+    suggestions_path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    state = initialize_review_state("leet-2026-verbal-even", suggestions_path, data_root=tmp_path / "data")
+
+    assert Path(state.candidates[0].preview_path or "").exists()
+    assert Path(state.candidates[1].preview_path or "").exists()
+
+
 def test_passage_range_edit_resyncs_linked_question_passage_ids(tmp_path: Path, suggestion_run: Path) -> None:
     suggestions_path = suggestion_run
     data_root = tmp_path / "data"

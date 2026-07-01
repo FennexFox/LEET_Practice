@@ -13,6 +13,7 @@ from datetime import datetime
 from enum import StrEnum
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -62,6 +63,10 @@ class ReviewCandidate(BaseModel):
     correct_answer: int | None = Field(default=None, ge=1, le=5)
     passage_id: str | None = None
     notes: str = ""
+    ocr_draft_text: str = ""
+    prefill_source: str | None = None
+    prefill_warnings: list[str] = Field(default_factory=list)
+    correction_steps: list[str] = Field(default_factory=list)
     provenance: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("choices")
@@ -80,7 +85,34 @@ class ReviewState(BaseModel):
     suggestions_path: str
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
+    draft_options: dict[str, bool] = Field(default_factory=dict)
     candidates: list[ReviewCandidate] = Field(default_factory=list)
+
+
+class DraftOptions(BaseModel):
+    """Optional OCR draft enhancement switches."""
+
+    enable_spacing_cleanup: bool = False
+    enable_morphology_checks: bool = False
+
+
+class OcrDraft(BaseModel):
+    """Structured draft generated from raw OCR text."""
+
+    draft_text: str
+    verified_text: str = ""
+    stem: str = ""
+    choices: list[str] = Field(default_factory=lambda: ["", "", "", "", ""])
+    warnings: list[str] = Field(default_factory=list)
+    correction_steps: list[str] = Field(default_factory=list)
+
+    @field_validator("choices")
+    @classmethod
+    def normalize_choices(cls, value: list[str]) -> list[str]:
+        normalized = [str(item) for item in value]
+        if len(normalized) < 5:
+            normalized.extend([""] * (5 - len(normalized)))
+        return normalized[:5]
 
 
 class VerifiedPassageDraft(BaseModel):
@@ -192,7 +224,15 @@ def _resolve_artifact_path(raw_path: str | None, suggestions_dir: Path) -> str |
         return None
     suggestions_root = suggestions_dir.resolve()
     path = Path(raw_path)
-    resolved = path.resolve() if path.is_absolute() else (suggestions_root / path).resolve()
+    if path.is_absolute():
+        resolved = path.resolve()
+    else:
+        repo_relative = path.resolve()
+        suggestion_relative = (suggestions_root / path).resolve()
+        if _is_relative_to(repo_relative, suggestions_root) and (repo_relative.exists() or not suggestion_relative.exists()):
+            resolved = repo_relative
+        else:
+            resolved = suggestion_relative
     if not _is_relative_to(resolved, suggestions_root):
         raise VerificationError(f"Artifact path escapes suggestions directory: {raw_path}")
     return str(resolved)
@@ -204,6 +244,267 @@ def _candidate_type(kind: str) -> CandidateType | None:
     if "question" in kind:
         return CandidateType.QUESTION
     return None
+
+
+CHOICE_MARKER_RE = re.compile(
+    r"^\s*(?P<marker>[\u2460-\u2464]|[1-5][.)\uff0e\uff09]|[(\uff08][1-5][)\uff09]|[1-5])\s*(?P<text>.*)$"
+)
+CHOICE_MARKER_TO_INDEX = {
+    "\u2460": 1,
+    "\u2461": 2,
+    "\u2462": 3,
+    "\u2463": 4,
+    "\u2464": 5,
+    "1)": 1,
+    "2)": 2,
+    "3)": 3,
+    "4)": 4,
+    "5)": 5,
+    "1.": 1,
+    "2.": 2,
+    "3.": 3,
+    "4.": 4,
+    "5.": 5,
+    "1\uff0e": 1,
+    "2\uff0e": 2,
+    "3\uff0e": 3,
+    "4\uff0e": 4,
+    "5\uff0e": 5,
+    "1\uff09": 1,
+    "2\uff09": 2,
+    "3\uff09": 3,
+    "4\uff09": 4,
+    "5\uff09": 5,
+    "(1)": 1,
+    "(2)": 2,
+    "(3)": 3,
+    "(4)": 4,
+    "(5)": 5,
+    "\uff081\uff09": 1,
+    "\uff082\uff09": 2,
+    "\uff083\uff09": 3,
+    "\uff084\uff09": 4,
+    "\uff085\uff09": 5,
+    "1": 1,
+    "2": 2,
+    "3": 3,
+    "4": 4,
+    "5": 5,
+}
+
+
+def _clean_lines(text: str) -> list[str]:
+    return [line.strip() for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n") if line.strip()]
+
+
+def _join_wrapped_lines(lines: list[str]) -> str:
+    return " ".join(line.strip() for line in lines if line.strip())
+
+
+def _join_wrapped_text(text: str) -> str:
+    return _join_wrapped_lines(_clean_lines(text))
+
+
+def _normalize_punctuation_spacing(text: str) -> str:
+    text = re.sub(r"(?<=[^\s\d])([,;:])(?=[^\s\d])", r"\1 ", text)
+    return re.sub(r"(?<=[\w\uac00-\ud7a3\u3131-\u318e])([.!?])(?=[A-Za-z\uac00-\ud7a3\u3131-\u318e])", r"\1 ", text)
+
+
+def _remove_leading_question_marker(line: str, question_number: int | None) -> tuple[str, bool]:
+    if question_number is None:
+        return line, False
+    pattern = re.compile(rf"^\s*(?:\ubb38\s*)?{question_number}(?:\s*[.)\uff0e\uff09]\s*|\s+)")
+    stripped = pattern.sub("", line, count=1).strip()
+    return stripped, stripped != line.strip()
+
+
+def _choice_index(marker: str) -> int | None:
+    return CHOICE_MARKER_TO_INDEX.get(marker)
+
+
+def _is_circled_choice_marker(marker: str) -> bool:
+    return "\u2460" <= marker <= "\u2464"
+
+
+def _apply_spacing_cleanup(text: str) -> tuple[str, list[str], list[str]]:
+    warnings: list[str] = []
+    steps: list[str] = []
+    try:
+        module = import_module("pykospacing")
+    except ImportError:
+        module = None
+    if module is not None and hasattr(module, "Spacing"):
+        try:
+            corrected = module.Spacing()(text)
+        except Exception as exc:  # noqa: BLE001 - optional backend should not break review.
+            return text, [f"spacing_backend_failed:pykospacing:{exc}"], []
+        return str(corrected), warnings, ["spacing_cleanup:pykospacing"]
+
+    try:
+        module = import_module("korspacing")
+    except ImportError:
+        module = None
+    if module is not None:
+        try:
+            if hasattr(module, "Spacing"):
+                corrected = module.Spacing()(text)
+            elif hasattr(module, "space"):
+                corrected = module.space(text)
+            else:
+                return text, ["spacing_backend_unavailable:no_supported_api"], []
+        except Exception as exc:  # noqa: BLE001 - optional backend should not break review.
+            return text, [f"spacing_backend_failed:korspacing:{exc}"], []
+        return str(corrected), warnings, ["spacing_cleanup:korspacing"]
+
+    return text, ["spacing_backend_unavailable"], steps
+
+
+def _kiwi_morphology_warnings(text: str) -> tuple[list[str], list[str]]:
+    try:
+        module = import_module("kiwipiepy")
+    except ImportError:
+        return ["kiwi_backend_unavailable"], []
+    if not hasattr(module, "Kiwi"):
+        return ["kiwi_backend_unavailable:no_kiwi_class"], []
+    try:
+        tokens = module.Kiwi().tokenize(text)
+    except Exception as exc:  # noqa: BLE001 - optional backend should not break review.
+        return [f"kiwi_backend_failed:{exc}"], []
+
+    warnings: list[str] = []
+    hangul_chars = len(re.findall(r"[\uac00-\ud7a3]", text))
+    token_count = len(tokens or [])
+    if hangul_chars and token_count == 0:
+        warnings.append("kiwi_no_tokens_for_hangul")
+    if hangul_chars >= 10 and token_count / max(hangul_chars, 1) > 0.85:
+        warnings.append("kiwi_fragmented_tokenization")
+    if re.search(r"[\ufffd\u25a1]{1,}|\?{2,}", text):
+        warnings.append("suspicious_ocr_fragments")
+    return warnings, ["kiwi_morphology_checked"]
+
+
+def generate_ocr_draft(
+    candidate_type: CandidateType,
+    raw_ocr_text: str,
+    *,
+    question_number: int | None = None,
+    options: DraftOptions | None = None,
+) -> OcrDraft:
+    """Generate a review draft from raw OCR text without changing the raw text."""
+
+    options = options or DraftOptions()
+    text = raw_ocr_text.strip()
+    warnings: list[str] = []
+    steps: list[str] = ["ocr_heuristic_prefill"]
+
+    if options.enable_spacing_cleanup and text:
+        text, spacing_warnings, spacing_steps = _apply_spacing_cleanup(text)
+        warnings.extend(spacing_warnings)
+        steps.extend(spacing_steps)
+
+    if options.enable_morphology_checks and text:
+        kiwi_warnings, kiwi_steps = _kiwi_morphology_warnings(text)
+        warnings.extend(kiwi_warnings)
+        steps.extend(kiwi_steps)
+
+    normalized_text = _normalize_punctuation_spacing(text)
+    if normalized_text != text:
+        text = normalized_text
+        steps.append("normalized_punctuation_spacing")
+
+    joined_text = _join_wrapped_text(text)
+    if joined_text != text:
+        steps.append("joined_forced_line_breaks")
+
+    if candidate_type == CandidateType.PASSAGE:
+        return OcrDraft(
+            draft_text=text,
+            verified_text=joined_text,
+            warnings=warnings,
+            correction_steps=steps,
+        )
+
+    lines = _clean_lines(text)
+    if lines:
+        lines[0], removed = _remove_leading_question_marker(lines[0], question_number)
+        if removed:
+            steps.append("removed_leading_question_marker")
+    stem_lines: list[str] = []
+    choice_lines: dict[int, list[str]] = {}
+    current_choice: int | None = None
+    duplicate_choices: set[int] = set()
+    ignored_markers: list[int] = []
+    for line in lines:
+        match = CHOICE_MARKER_RE.match(line)
+        if match:
+            index = _choice_index(match.group("marker"))
+            if index is None:
+                stem_lines.append(line)
+                current_choice = None
+                continue
+            expected_index = 1 if not choice_lines else max(choice_lines) + 1
+            if index != expected_index and not (index in choice_lines and _is_circled_choice_marker(match.group("marker"))):
+                ignored_markers.append(index)
+                if current_choice is not None:
+                    choice_lines[current_choice].append(line)
+                else:
+                    stem_lines.append(line)
+                continue
+            if index in choice_lines:
+                duplicate_choices.add(index)
+            choice_lines.setdefault(index, [])
+            choice_text = match.group("text").strip()
+            if choice_text:
+                choice_lines[index].append(choice_text)
+            current_choice = index
+            continue
+        if current_choice is not None:
+            choice_lines[current_choice].append(line)
+        else:
+            stem_lines.append(line)
+
+    detected = sorted(choice_lines)
+    if not detected:
+        warnings.append("no_choices_detected")
+    elif detected != [1, 2, 3, 4, 5]:
+        warnings.append(f"choices_detected_{len(detected)}")
+    if duplicate_choices:
+        warnings.append("duplicate_choice_markers:" + ",".join(str(index) for index in sorted(duplicate_choices)))
+    if ignored_markers:
+        warnings.append("ignored_out_of_sequence_choice_markers:" + ",".join(str(index) for index in sorted(set(ignored_markers))))
+
+    choices = ["", "", "", "", ""]
+    for index, parts in choice_lines.items():
+        if 1 <= index <= 5:
+            choices[index - 1] = _join_wrapped_lines(parts)
+
+    return OcrDraft(
+        draft_text=text,
+        stem=_join_wrapped_lines(stem_lines),
+        choices=choices,
+        warnings=warnings,
+        correction_steps=steps,
+    )
+
+
+def apply_ocr_draft(candidate: ReviewCandidate, options: DraftOptions | None = None) -> ReviewCandidate:
+    draft = generate_ocr_draft(
+        candidate.candidate_type,
+        candidate.raw_ocr_text,
+        question_number=candidate.question_number,
+        options=options,
+    )
+    patch = candidate.model_dump()
+    patch["ocr_draft_text"] = draft.draft_text
+    patch["prefill_source"] = "ocr_heuristic"
+    patch["prefill_warnings"] = draft.warnings
+    patch["correction_steps"] = draft.correction_steps
+    if candidate.candidate_type == CandidateType.PASSAGE:
+        patch["verified_text"] = draft.verified_text
+    else:
+        patch["stem"] = draft.stem
+        patch["choices"] = draft.choices
+    return ReviewCandidate.model_validate(patch)
 
 
 def _row_indices(row_ids: list[Any]) -> set[int]:
@@ -259,9 +560,15 @@ def question_id_for(exam_id: str, question_no: int) -> str:
     return f"{exam_id}-q{question_no:03d}"
 
 
-def parse_suggestions(exam_id: str, suggestions_path: Path) -> ReviewState:
+def parse_suggestions(
+    exam_id: str,
+    suggestions_path: Path,
+    *,
+    draft_options: DraftOptions | None = None,
+) -> ReviewState:
     """Parse a crop-suggestion artifact into a review state."""
 
+    draft_options = draft_options or DraftOptions()
     suggestions_path = suggestions_path.resolve()
     payload = _read_json(suggestions_path)
     suggestions_dir = suggestions_path.parent
@@ -283,26 +590,26 @@ def parse_suggestions(exam_id: str, suggestions_path: Path) -> ReviewState:
         if candidate_id in candidate_ids:
             raise VerificationError(f"Duplicate candidate_id after slug normalization: {candidate_id}")
         candidate_ids.add(candidate_id)
-        candidates.append(
-            ReviewCandidate(
-                candidate_id=candidate_id,
-                suggestion_id=suggestion_id,
-                candidate_type=normalized_type,
-                question_number=item.get("question_number"),
-                start_question=start_question,
-                end_question=end_question,
-                preview_path=_resolve_artifact_path(item.get("candidate_preview_path"), suggestions_dir),
-                raw_ocr_text=collect_raw_ocr_text(item, suggestions_dir),
-                passage_id=passage_id,
-                provenance={
-                    "suggestions_path": str(suggestions_path),
-                    "original": item,
-                },
-            )
+        candidate = ReviewCandidate(
+            candidate_id=candidate_id,
+            suggestion_id=suggestion_id,
+            candidate_type=normalized_type,
+            question_number=item.get("question_number"),
+            start_question=start_question,
+            end_question=end_question,
+            preview_path=_resolve_artifact_path(item.get("candidate_preview_path"), suggestions_dir),
+            raw_ocr_text=collect_raw_ocr_text(item, suggestions_dir),
+            passage_id=passage_id,
+            provenance={
+                "suggestions_path": str(suggestions_path),
+                "original": item,
+            },
         )
+        candidates.append(apply_ocr_draft(candidate, draft_options))
     return ReviewState(
         exam_id=exam_id,
         suggestions_path=str(suggestions_path),
+        draft_options=draft_options.model_dump(),
         candidates=candidates,
     )
 
@@ -327,13 +634,19 @@ def initialize_review_state(
     *,
     data_root: Path = Path("data"),
     overwrite: bool = False,
+    enable_spacing_cleanup: bool = False,
+    enable_morphology_checks: bool = False,
 ) -> ReviewState:
     """Create or load review state for a suggestions file."""
 
     path = review_state_path(exam_id, data_root=data_root)
     if path.exists() and not overwrite:
         return load_review_state(exam_id, data_root=data_root)
-    state = parse_suggestions(exam_id, suggestions_path)
+    draft_options = DraftOptions(
+        enable_spacing_cleanup=enable_spacing_cleanup,
+        enable_morphology_checks=enable_morphology_checks,
+    )
+    state = parse_suggestions(exam_id, suggestions_path, draft_options=draft_options)
     save_review_state(state, data_root=data_root)
     write_verified_drafts(state, data_root=data_root)
     return state
@@ -408,6 +721,27 @@ def update_candidate(
                 updated.start_question,
                 updated.end_question,
             )
+        drafts = build_verified_drafts(state)
+        save_review_state(state, data_root=data_root)
+        write_verified_drafts(state, data_root=data_root, drafts=drafts)
+        return updated
+
+
+def reapply_ocr_draft(
+    exam_id: str,
+    candidate_id: str,
+    *,
+    data_root: Path = Path("data"),
+) -> ReviewCandidate:
+    """Explicitly replace editable fields with the stored OCR draft strategy."""
+
+    with _review_state_lock:
+        state = load_review_state(exam_id, data_root=data_root)
+        candidate = _candidate_by_id(state, candidate_id)
+        options = DraftOptions.model_validate(state.draft_options)
+        updated = apply_ocr_draft(candidate, options)
+        index = state.candidates.index(candidate)
+        state.candidates[index] = updated
         drafts = build_verified_drafts(state)
         save_review_state(state, data_root=data_root)
         write_verified_drafts(state, data_root=data_root, drafts=drafts)
@@ -605,6 +939,8 @@ def workbench_html() -> str:
     .status { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 12px; }
     .hidden { display: none; }
     .field-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .draft-box { background: #fff8e1; border: 1px solid #e4c66a; border-radius: 6px; padding: 8px; margin-top: 10px; font-size: 12px; }
+    .draft-box ul { margin: 6px 0 0 18px; padding: 0; }
     pre { white-space: pre-wrap; background: #f1f3f4; padding: 8px; border-radius: 6px; max-height: 160px; overflow: auto; }
   </style>
 </head>
@@ -636,7 +972,8 @@ def workbench_html() -> str:
         <label>Passage ID</label><input id="passage_id">
       </div>
       <label>Notes</label><textarea id="notes"></textarea>
-      <div class="status"><button id="save">Save</button><button id="next">Next</button></div>
+      <div class="draft-box" id="draftBox"></div>
+      <div class="status"><button id="applyDraft" type="button">Apply OCR draft</button><button id="save">Save</button><button id="next">Next</button></div>
       <div class="field-head"><label>Raw OCR</label><button id="copyRaw" type="button">Copy</button></div><pre id="raw"></pre>
       <label>Provenance</label><pre id="prov"></pre>
     </section>
@@ -682,6 +1019,9 @@ def workbench_html() -> str:
       document.getElementById("passageFields").classList.toggle("hidden", !isPassage);
       document.getElementById("questionFields").classList.toggle("hidden", isPassage);
     }
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, char => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
+    }
     function select(id) {
       current = state.candidates.find(c => c.candidate_id === id); if (!current) return;
       setPanelMode(current);
@@ -693,6 +1033,18 @@ def workbench_html() -> str:
       setChoices(current.choices);
       document.getElementById("raw").textContent = current.raw_ocr_text || "";
       document.getElementById("prov").textContent = JSON.stringify(current.provenance, null, 2);
+      renderDraftMetadata();
+    }
+    function renderDraftMetadata() {
+      const box = document.getElementById("draftBox");
+      const warnings = current?.prefill_warnings || [];
+      const steps = current?.correction_steps || [];
+      const source = escapeHtml(current?.prefill_source || "none");
+      const warningItems = warnings.map(item => `<li>${escapeHtml(item)}</li>`).join("");
+      const stepItems = steps.map(item => `<li>${escapeHtml(item)}</li>`).join("");
+      box.innerHTML = `<strong>OCR draft</strong><div>source: ${source}</div>` +
+        (warnings.length ? `<div>warnings:<ul>${warningItems}</ul></div>` : "<div>warnings: none</div>") +
+        (steps.length ? `<div>steps:<ul>${stepItems}</ul></div>` : "");
     }
     function numberValue(id) {
       const value = document.getElementById(id).value;
@@ -740,6 +1092,18 @@ def workbench_html() -> str:
       }
     }
     document.getElementById("save").onclick = save;
+    document.getElementById("applyDraft").onclick = async () => {
+      if (!current) return;
+      const hasEdits = current.candidate_type === "passage"
+        ? Boolean(document.getElementById("verified_text").value.trim())
+        : Boolean(document.getElementById("stem").value.trim() || [0,1,2,3,4].some(i => document.getElementById(`choice_${i}`).value.trim()));
+      if (hasEdits && !confirm("Replace current editable fields with the OCR draft?")) return;
+      const candidateId = current.candidate_id;
+      const response = await fetch(`/api/candidates/${encodeURIComponent(candidateId)}/apply-ocr-draft`, {method: "POST"});
+      if (!response.ok) return;
+      await load();
+      select(candidateId);
+    };
     ["status", "verified_text", "stem", "correct_answer", "passage_id", "notes", "question_number", "start_question", "end_question"].forEach(id => {
       const element = document.getElementById(id);
       element.addEventListener("input", scheduleAutosave);
@@ -804,7 +1168,21 @@ class VerificationWorkbench:
             def do_POST(self) -> None:
                 parsed = urlparse(self.path)
                 if parsed.path.startswith("/api/candidates/"):
-                    candidate_id = unquote(parsed.path.removeprefix("/api/candidates/"))
+                    suffix = parsed.path.removeprefix("/api/candidates/")
+                    if suffix.endswith("/apply-ocr-draft"):
+                        candidate_id = unquote(suffix.removesuffix("/apply-ocr-draft"))
+                        try:
+                            candidate = reapply_ocr_draft(
+                                workbench.exam_id,
+                                candidate_id,
+                                data_root=workbench.data_root,
+                            )
+                        except (ValidationError, VerificationError) as exc:
+                            _json_response(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                            return
+                        _json_response(self, candidate.model_dump(mode="json"))
+                        return
+                    candidate_id = unquote(suffix)
                     length = int(self.headers.get("Content-Length") or 0)
                     body = self.rfile.read(length).decode("utf-8")
                     try:
@@ -832,6 +1210,14 @@ class VerificationWorkbench:
             return
         path = Path(candidate.preview_path).resolve()
         suggestions_root = Path(state.suggestions_path).resolve().parent
+        if _is_relative_to(path, suggestions_root) and not (path.exists() and path.is_file()):
+            original_path = candidate.provenance.get("original", {}).get("candidate_preview_path")
+            try:
+                resolved_original = _resolve_artifact_path(original_path, suggestions_root)
+            except VerificationError:
+                resolved_original = None
+            if resolved_original:
+                path = Path(resolved_original).resolve()
         if not _is_relative_to(path, suggestions_root) or not path.exists() or not path.is_file():
             _json_response(handler, {"error": "preview not found"}, HTTPStatus.NOT_FOUND)
             return

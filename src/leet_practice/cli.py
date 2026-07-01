@@ -63,6 +63,16 @@ def review_crops(
     no_open: bool = typer.Option(False, "--no-open", help="Do not open the browser automatically."),
     init_only: bool = typer.Option(False, "--init-only", help="Initialize review state without starting the server."),
     overwrite: bool = typer.Option(False, "--overwrite", help="Rebuild review state from suggestions.json."),
+    enable_spacing_cleanup: bool = typer.Option(
+        False,
+        "--enable-spacing-cleanup",
+        help="Apply optional local Korean spacing cleanup to OCR drafts when a backend is installed.",
+    ),
+    enable_morphology_checks: bool = typer.Option(
+        False,
+        "--enable-morphology-checks",
+        help="Run optional Kiwi/kiwipiepy morphology checks for OCR draft warnings when installed.",
+    ),
     unsafe_allow_remote: bool = typer.Option(
         False,
         "--unsafe-allow-remote",
@@ -77,6 +87,8 @@ def review_crops(
             suggestions,
             data_root=data_root,
             overwrite=overwrite,
+            enable_spacing_cleanup=enable_spacing_cleanup,
+            enable_morphology_checks=enable_morphology_checks,
         )
     except VerificationError as exc:
         console.print(f"[red]Verification setup failed:[/red] {exc}")
