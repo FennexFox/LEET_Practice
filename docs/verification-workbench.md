@@ -23,21 +23,20 @@ The workbench should optimize for fast visual checking:
 Start a review session:
 
 ```powershell
-leet-practice review-crops `
-  --exam-id leet-2026-verbal-even `
-  --suggestions artifacts/question_crop_suggestions/leet-2026-verbal-even-p001-010/suggestions.json
+leet-practice verify leet-2026-verbal-even
 ```
 
 Use `--init-only` to create or refresh review state without starting the
 server. Use `--no-open` to start the server without opening a browser.
+By default, the command uses the latest matching
+`artifacts/question_crop_suggestions/<exam_id>*/suggestions.json`. Pass
+`--suggestions` only when you need a specific run.
 
 Use optional local cleanup only when you want OCR draft suggestions to run
 through local helpers during initialization:
 
 ```powershell
-leet-practice review-crops `
-  --exam-id leet-2026-verbal-even `
-  --suggestions artifacts/question_crop_suggestions/leet-2026-verbal-even-p001-010/suggestions.json `
+leet-practice verify leet-2026-verbal-even `
   --enable-spacing-cleanup `
   --enable-morphology-checks
 ```
@@ -147,7 +146,7 @@ These files may contain official text and should remain local by default.
 Canonical data should be updated only by an explicit promotion command:
 
 ```powershell
-leet-practice promote-verified --exam-id leet-2026-verbal-even
+leet-practice promote leet-2026-verbal-even
 ```
 
 The promotion command should validate:

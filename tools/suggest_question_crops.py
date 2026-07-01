@@ -130,7 +130,7 @@ class SetHeaderAnchor:
     selected: bool = False
 
 
-def parse_args() -> argparse.Namespace:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Suggest candidate LEET question crops from a PaddleOCR virtual reading stream."
     )
@@ -263,7 +263,11 @@ def parse_args() -> argparse.Namespace:
         help="Import paddle before PaddleOCR. Useful for Paddle GPU builds on Windows. Default: false.",
     )
 
-    return parser.parse_args()
+    return parser
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    return build_parser().parse_args(argv)
 
 
 def make_run_dir(base_dir: Path, run_id: str | None) -> Path:
