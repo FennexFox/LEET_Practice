@@ -42,9 +42,10 @@ leet-practice review-crops `
   --enable-morphology-checks
 ```
 
-Spacing cleanup tries local `pykospacing` first and then `korspacing` if those
-packages are installed. Morphology checks use `kiwipiepy` when installed. Missing
-optional packages are recorded as draft warnings instead of blocking review.
+Spacing cleanup tries local `pykospacing` first, then `korspacing`, and then
+`kiwipiepy` when those packages are installed. Morphology checks also use
+`kiwipiepy` when installed. Missing optional packages are recorded as draft
+warnings instead of blocking review.
 
 The command starts a local server and opens a browser-based review UI by
 default.

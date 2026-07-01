@@ -26,8 +26,9 @@ ocr = [
 ]
 local-nlp = [
     # Korean spacing backends are runtime-detected because PyKoSpacing/KorSpacing
-    # installation options vary by platform. Install `pykospacing` or
-    # `korspacing` separately when spacing cleanup is needed.
+    # installation options vary by platform. `kiwipiepy` provides the default
+    # local-nlp spacing fallback; install `pykospacing` or `korspacing`
+    # separately when those backends are preferred.
     "kiwipiepy>=0.20",
 ]
 dev = [

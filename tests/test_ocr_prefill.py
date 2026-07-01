@@ -250,3 +250,25 @@ def test_fake_spacing_and_kiwi_backends_record_metadata(monkeypatch: pytest.Monk
     assert draft.verified_text == "붙여쓰기 문장"
     assert "spacing_cleanup:pykospacing" in draft.correction_steps
     assert "kiwi_morphology_checked" in draft.correction_steps
+
+
+def test_kiwipiepy_spacing_backend_records_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeKiwi:
+        def space(self, text: str) -> str:
+            return text.replace("withoutspace", "without space")
+
+    def fake_import(name: str):
+        if name == "kiwipiepy":
+            return SimpleNamespace(Kiwi=lambda: FakeKiwi())
+        raise ImportError(name)
+
+    monkeypatch.setattr(verification, "import_module", fake_import)
+
+    draft = generate_ocr_draft(
+        CandidateType.PASSAGE,
+        "withoutspace",
+        options=DraftOptions(enable_spacing_cleanup=True),
+    )
+
+    assert draft.verified_text == "without space"
+    assert "spacing_cleanup:kiwipiepy" in draft.correction_steps

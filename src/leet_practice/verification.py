@@ -356,6 +356,19 @@ def _apply_spacing_cleanup(text: str) -> tuple[str, list[str], list[str]]:
             return text, [f"spacing_backend_failed:korspacing:{exc}"], []
         return str(corrected), warnings, ["spacing_cleanup:korspacing"]
 
+    try:
+        module = import_module("kiwipiepy")
+    except ImportError:
+        module = None
+    if module is not None:
+        if not hasattr(module, "Kiwi"):
+            return text, ["spacing_backend_unavailable:kiwipiepy:no_kiwi_class"], []
+        try:
+            corrected = module.Kiwi().space(text)
+        except Exception as exc:  # noqa: BLE001 - optional backend should not break review.
+            return text, [f"spacing_backend_failed:kiwipiepy:{exc}"], []
+        return str(corrected), warnings, ["spacing_cleanup:kiwipiepy"]
+
     return text, ["spacing_backend_unavailable"], steps
 
 
