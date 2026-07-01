@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def _load_suggest_question_crops():
@@ -36,4 +38,176 @@ def test_edge_header_fragment_ocr_as_geuho_is_excluded() -> None:
 
     assert module.classify_excluded_row("\uadf8\ud638", [0, 595, 93, 681], 1392, 4415) == [
         "short-header-footer-fragment-at-page-edge"
+    ]
+
+
+def _ocr_args(**overrides):
+    defaults = {
+        "paddle_lang": "korean",
+        "paddle_device": None,
+        "paddle_cpu_threads": 4,
+        "paddle_disable_mkldnn": True,
+        "paddle_text_recognition_batch_size": 32,
+        "paddle_disable_pir": True,
+        "paddle_disable_doc_preprocess": True,
+        "include_raw_paddle_payload": False,
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+def _raw_block(module, index: int, page: int, column: str, tmp_path: Path):
+    return module.RawBlock(
+        sequence_index=index,
+        page=page,
+        column=column,
+        page_image_path=str(tmp_path / f"page_{page:03d}.png"),
+        image_path=str(tmp_path / f"page_{page:03d}_{column}.png"),
+        page_bbox=[0, 0, 100, 200],
+        local_size=[100, 200],
+    )
+
+
+def test_run_ocr_for_blocks_uses_batch_and_writes_compact_artifacts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _load_suggest_question_crops()
+    raw_blocks = [_raw_block(module, 0, 1, "left", tmp_path), _raw_block(module, 1, 1, "right", tmp_path)]
+
+    def fake_batch(image_paths, args):
+        assert [path.name for path in image_paths] == ["page_001_left.png", "page_001_right.png"]
+        return [
+            ("", {"language": "korean", "runtime_flags": {}, "rows": [{"text": "1. left", "confidence": 0.9}]}),
+            ("", {"language": "korean", "runtime_flags": {}, "rows": [{"text": "2. right", "confidence": 0.8}]}),
+        ]
+
+    monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "run_paddleocr_batch", fake_batch)
+
+    ocr_blocks, errors = module.run_ocr_for_blocks(raw_blocks, _ocr_args(), tmp_path)
+
+    assert errors == []
+    assert [block.raw_rows[0]["text"] for block in ocr_blocks] == ["1. left", "2. right"]
+    payload = json.loads((tmp_path / "page_001_left.paddleocr.json").read_text(encoding="utf-8"))
+    assert set(payload) == {
+        "artifact_type",
+        "verified",
+        "status",
+        "engine",
+        "language",
+        "runtime_flags",
+        "page",
+        "column",
+        "image_path",
+        "page_bbox",
+        "local_size",
+        "options",
+        "rows",
+    }
+
+
+def test_run_ocr_for_blocks_falls_back_when_batch_fails(tmp_path: Path, monkeypatch) -> None:
+    module = _load_suggest_question_crops()
+    raw_blocks = [_raw_block(module, 0, 1, "left", tmp_path), _raw_block(module, 1, 1, "right", tmp_path)]
+    calls: list[str] = []
+
+    def fake_batch(image_paths, args):
+        raise ValueError("shape mismatch")
+
+    def fake_single(block, args, run_dir):
+        calls.append(block["column"])
+        return ([{"text": block["column"], "confidence": 1.0}], None)
+
+    monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "run_paddleocr_batch", fake_batch)
+    monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "run_ocr_for_block", fake_single)
+
+    ocr_blocks, errors = module.run_ocr_for_blocks(raw_blocks, _ocr_args(), tmp_path)
+
+    assert errors == []
+    assert calls == ["left", "right"]
+    assert [block.raw_rows[0]["text"] for block in ocr_blocks] == ["left", "right"]
+
+
+def test_run_ocr_for_blocks_falls_back_on_batch_result_count_mismatch(tmp_path: Path, monkeypatch) -> None:
+    module = _load_suggest_question_crops()
+    raw_blocks = [_raw_block(module, 0, 1, "left", tmp_path), _raw_block(module, 1, 1, "right", tmp_path)]
+    calls: list[str] = []
+
+    def fake_batch(image_paths, args):
+        return [("", {"language": "korean", "runtime_flags": {}, "rows": []})]
+
+    def fake_single(block, args, run_dir):
+        calls.append(block["column"])
+        return ([{"text": block["column"], "confidence": 1.0}], None)
+
+    monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "run_paddleocr_batch", fake_batch)
+    monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "run_ocr_for_block", fake_single)
+
+    ocr_blocks, errors = module.run_ocr_for_blocks(raw_blocks, _ocr_args(), tmp_path)
+
+    assert errors == []
+    assert calls == ["left", "right"]
+    assert [block.raw_rows[0]["text"] for block in ocr_blocks] == ["left", "right"]
+
+
+def test_suggestions_payload_top_level_schema_is_stable(tmp_path: Path) -> None:
+    module = _load_suggest_question_crops()
+    args = SimpleNamespace(
+        pages="1",
+        pdf=Path("paper.pdf"),
+        dpi=300,
+        crop_top=0.05,
+        crop_bottom=0.94,
+        crop_left=0.05,
+        crop_right=0.95,
+        center_gutter=0.012,
+        content_padding=18,
+        crop_padding=24,
+        keep_crop_part_images=False,
+        stream_gap=40,
+        min_anchor_score=0.48,
+        allow_weak_question_anchors=False,
+        include_raw_paddle_payload=False,
+        reuse_existing_images=False,
+        paddle_lang="korean",
+        paddle_device=None,
+        paddle_cpu_threads=4,
+        paddle_disable_mkldnn=True,
+        paddle_text_recognition_batch_size=None,
+        paddle_disable_pir=True,
+        paddle_disable_doc_preprocess=True,
+        paddle_preimport_torch=True,
+        paddle_preimport_paddle=False,
+        no_annotated_blocks=True,
+    )
+
+    payload = module.build_suggestions_payload(
+        args,
+        tmp_path,
+        [],
+        [],
+        [],
+        [],
+        interrupted=False,
+    )
+
+    assert list(payload) == [
+        "artifact_type",
+        "created_at",
+        "verified",
+        "source",
+        "options",
+        "model",
+        "status",
+        "interrupted",
+        "processed_pages",
+        "blocks",
+        "rows",
+        "set_header_candidates",
+        "selected_set_headers",
+        "anchor_candidates",
+        "selected_anchors",
+        "suggestions",
+        "annotated_block_paths",
+        "ocr_errors",
     ]

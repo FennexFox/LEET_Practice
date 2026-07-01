@@ -27,6 +27,7 @@ from leet_practice.compare_ocr_engines import (
     extract_paddle_rows,
     render_pdf_page,
     run_paddleocr,
+    run_paddleocr_batch,
     safe_jsonable,
 )
 
@@ -60,6 +61,34 @@ HEADER_FOOTER_EDGE_TEXT_RE = re.compile(
 HEADER_FOOTER_TOP_EDGE_RATIO = 0.18
 HEADER_FOOTER_BOTTOM_EDGE_RATIO = 0.92
 STANDALONE_NUMBER_TOP_EDGE_RATIO = 0.10
+
+
+@dataclass(frozen=True)
+class RawBlock:
+    sequence_index: int
+    page: int
+    column: str
+    page_image_path: str
+    image_path: str
+    page_bbox: list[int]
+    local_size: list[int]
+
+    def ocr_input(self) -> dict[str, Any]:
+        return {
+            "page": self.page,
+            "column": self.column,
+            "page_image_path": self.page_image_path,
+            "image_path": self.image_path,
+            "page_bbox": self.page_bbox,
+            "local_size": self.local_size,
+        }
+
+
+@dataclass(frozen=True)
+class OcrBlock:
+    raw_block: RawBlock
+    raw_rows: list[dict[str, Any]]
+    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -476,44 +505,55 @@ def format_compact_ocr_text(rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def write_ocr_block_artifacts(
+    block: dict[str, Any],
+    payload: dict[str, Any],
+    args: argparse.Namespace,
+    run_dir: Path,
+) -> list[dict[str, Any]]:
+    label = f"page_{block['page']:03d}_{block['column']}"
+    raw_rows = list(payload.get("rows") or extract_paddle_rows(payload))
+    compact_rows = compact_ocr_rows(raw_rows, block)
+    text_path = run_dir / f"{label}.paddleocr.txt"
+    json_path = run_dir / f"{label}.paddleocr.json"
+    text_path.write_text(format_compact_ocr_text(compact_rows), encoding="utf-8")
+
+    compact_payload: dict[str, Any] = {
+        "artifact_type": "candidate_question_crop_ocr_source",
+        "verified": False,
+        "status": "ok",
+        "engine": "paddleocr",
+        "language": payload.get("language"),
+        "runtime_flags": payload.get("runtime_flags", {}),
+        "page": block["page"],
+        "column": block["column"],
+        "image_path": block["image_path"],
+        "page_bbox": block["page_bbox"],
+        "local_size": block["local_size"],
+        "options": {
+            "paddle_lang": args.paddle_lang,
+            "paddle_device": args.paddle_device,
+            "paddle_cpu_threads": args.paddle_cpu_threads,
+            "paddle_disable_mkldnn": args.paddle_disable_mkldnn,
+            "paddle_text_recognition_batch_size": args.paddle_text_recognition_batch_size,
+            "paddle_disable_pir": args.paddle_disable_pir,
+            "paddle_disable_doc_preprocess": args.paddle_disable_doc_preprocess,
+            "include_raw_paddle_payload": args.include_raw_paddle_payload,
+        },
+        "rows": compact_rows,
+    }
+    if args.include_raw_paddle_payload:
+        compact_payload["raw"] = payload.get("raw")
+
+    json_path.write_text(json.dumps(compact_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return raw_rows
+
+
 def run_ocr_for_block(block: dict[str, Any], args: argparse.Namespace, run_dir: Path) -> tuple[list[dict[str, Any]], str | None]:
     label = f"page_{block['page']:03d}_{block['column']}"
     try:
         _, payload = run_paddleocr(Path(block["image_path"]), args)
-        raw_rows = list(payload.get("rows") or extract_paddle_rows(payload))
-        compact_rows = compact_ocr_rows(raw_rows, block)
-        text_path = run_dir / f"{label}.paddleocr.txt"
-        json_path = run_dir / f"{label}.paddleocr.json"
-        text_path.write_text(format_compact_ocr_text(compact_rows), encoding="utf-8")
-
-        compact_payload: dict[str, Any] = {
-            "artifact_type": "candidate_question_crop_ocr_source",
-            "verified": False,
-            "status": "ok",
-            "engine": "paddleocr",
-            "language": payload.get("language"),
-            "runtime_flags": payload.get("runtime_flags", {}),
-            "page": block["page"],
-            "column": block["column"],
-            "image_path": block["image_path"],
-            "page_bbox": block["page_bbox"],
-            "local_size": block["local_size"],
-            "options": {
-                "paddle_lang": args.paddle_lang,
-                "paddle_device": args.paddle_device,
-                "paddle_cpu_threads": args.paddle_cpu_threads,
-                "paddle_disable_mkldnn": args.paddle_disable_mkldnn,
-                "paddle_text_recognition_batch_size": args.paddle_text_recognition_batch_size,
-                "paddle_disable_pir": args.paddle_disable_pir,
-                "paddle_disable_doc_preprocess": args.paddle_disable_doc_preprocess,
-                "include_raw_paddle_payload": args.include_raw_paddle_payload,
-            },
-            "rows": compact_rows,
-        }
-        if args.include_raw_paddle_payload:
-            compact_payload["raw"] = payload.get("raw")
-
-        json_path.write_text(json.dumps(compact_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        raw_rows = write_ocr_block_artifacts(block, payload, args, run_dir)
         return raw_rows, None
     except Exception as exc:  # noqa: BLE001 - one bad block should not suppress suggestions.json.
         error_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
@@ -1282,46 +1322,113 @@ def save_annotated_blocks(
     return paths
 
 
-def build_stream(args: argparse.Namespace, run_dir: Path) -> dict[str, Any]:
+def prepare_page_column_blocks(args: argparse.Namespace, run_dir: Path) -> list[RawBlock]:
     pages = parse_pages(args.pages)
+    raw_blocks: list[RawBlock] = []
+    for page in pages:
+        print(f"Rendering page {page}...")
+        page_image = render_pdf_page_cached(args.pdf, page, args.dpi, run_dir, args)
+        for raw_block in crop_page_columns(page_image, run_dir, page, args):
+            raw_blocks.append(
+                RawBlock(
+                    sequence_index=len(raw_blocks),
+                    page=int(raw_block["page"]),
+                    column=str(raw_block["column"]),
+                    page_image_path=str(raw_block["page_image_path"]),
+                    image_path=str(raw_block["image_path"]),
+                    page_bbox=list(raw_block["page_bbox"]),
+                    local_size=list(raw_block["local_size"]),
+                )
+            )
+    return raw_blocks
+
+
+def _ocr_error(raw_block: RawBlock, error: str) -> dict[str, Any]:
+    return {
+        "page": raw_block.page,
+        "column": raw_block.column,
+        "image_path": raw_block.image_path,
+        "error": error,
+    }
+
+
+def _run_ocr_for_blocks_individually(
+    raw_blocks: list[RawBlock],
+    args: argparse.Namespace,
+    run_dir: Path,
+) -> tuple[list[OcrBlock], list[dict[str, Any]]]:
+    ocr_blocks: list[OcrBlock] = []
+    ocr_errors: list[dict[str, Any]] = []
+    for raw_block in raw_blocks:
+        print(f"Running PaddleOCR on page {raw_block.page} {raw_block.column}...")
+        raw_rows, error = run_ocr_for_block(raw_block.ocr_input(), args, run_dir)
+        if error:
+            ocr_errors.append(_ocr_error(raw_block, error))
+        ocr_blocks.append(OcrBlock(raw_block=raw_block, raw_rows=raw_rows, error=error))
+    return ocr_blocks, ocr_errors
+
+
+def run_ocr_for_blocks(
+    raw_blocks: list[RawBlock],
+    args: argparse.Namespace,
+    run_dir: Path,
+) -> tuple[list[OcrBlock], list[dict[str, Any]]]:
+    if len(raw_blocks) <= 1:
+        return _run_ocr_for_blocks_individually(raw_blocks, args, run_dir)
+
+    print(f"Running PaddleOCR batch on {len(raw_blocks)} page-column blocks...")
+    try:
+        batch_results = run_paddleocr_batch([Path(raw_block.image_path) for raw_block in raw_blocks], args)
+        if len(batch_results) != len(raw_blocks):
+            raise ValueError("Batch OCR result count did not match input block count")
+        ocr_blocks: list[OcrBlock] = []
+        for raw_block, (_, payload) in zip(raw_blocks, batch_results, strict=True):
+            raw_rows = write_ocr_block_artifacts(raw_block.ocr_input(), payload, args, run_dir)
+            ocr_blocks.append(OcrBlock(raw_block=raw_block, raw_rows=raw_rows))
+        return ocr_blocks, []
+    except Exception as exc:  # noqa: BLE001 - unsupported batch OCR should preserve current behavior.
+        print(f"Batch OCR unavailable; falling back to per-block OCR: {exc}")
+        return _run_ocr_for_blocks_individually(raw_blocks, args, run_dir)
+
+
+def build_stream_from_ocr_blocks(
+    ocr_blocks: list[OcrBlock],
+    args: argparse.Namespace,
+) -> tuple[list[ColumnBlock], list[StreamRow]]:
     blocks: list[ColumnBlock] = []
     rows: list[StreamRow] = []
-    ocr_errors: list[dict[str, Any]] = []
-    processed_pages: list[int] = []
     stream_y = 0.0
-    interrupted = False
+    for ocr_block in sorted(ocr_blocks, key=lambda block: block.raw_block.sequence_index):
+        block, block_rows = make_block_and_rows(ocr_block.raw_block.ocr_input(), ocr_block.raw_rows, stream_y, args)
+        blocks.append(block)
+        rows.extend(block_rows)
+        stream_y = block.stream_y_end + args.stream_gap
+    return blocks, rows
 
-    try:
-        for page in pages:
-            print(f"Rendering page {page}...")
-            page_image = render_pdf_page_cached(args.pdf, page, args.dpi, run_dir, args)
-            raw_blocks = crop_page_columns(page_image, run_dir, page, args)
 
-            page_completed = True
-            for raw_block in raw_blocks:
-                print(f"Running PaddleOCR on page {raw_block['page']} {raw_block['column']}...")
-                raw_rows, error = run_ocr_for_block(raw_block, args, run_dir)
-                if error:
-                    page_completed = False
-                    ocr_errors.append(
-                        {
-                            "page": raw_block["page"],
-                            "column": raw_block["column"],
-                            "image_path": raw_block["image_path"],
-                            "error": error,
-                        }
-                    )
-                block, block_rows = make_block_and_rows(raw_block, raw_rows, stream_y, args)
-                blocks.append(block)
-                rows.extend(block_rows)
-                stream_y = block.stream_y_end + args.stream_gap
+def processed_pages_from_ocr_blocks(pages: list[int], ocr_blocks: list[OcrBlock]) -> list[int]:
+    blocks_by_page: dict[int, list[OcrBlock]] = {}
+    for ocr_block in ocr_blocks:
+        blocks_by_page.setdefault(ocr_block.raw_block.page, []).append(ocr_block)
+    processed_pages: list[int] = []
+    for page in pages:
+        page_blocks = blocks_by_page.get(page, [])
+        if len(page_blocks) == len(COLUMN_ORDER) and all(block.error is None for block in page_blocks):
+            processed_pages.append(page)
+    return processed_pages
 
-            if page_completed:
-                processed_pages.append(page)
-    except KeyboardInterrupt:
-        interrupted = True
-        print("\nInterrupted; writing partial suggestions for completed OCR blocks...")
 
+def build_suggestions_payload(
+    args: argparse.Namespace,
+    run_dir: Path,
+    blocks: list[ColumnBlock],
+    rows: list[StreamRow],
+    ocr_blocks: list[OcrBlock],
+    ocr_errors: list[dict[str, Any]],
+    *,
+    interrupted: bool,
+) -> dict[str, Any]:
+    pages = parse_pages(args.pages)
     blocks_by_id = {block.block_id: block for block in blocks}
     set_header_candidates, selected_set_headers = detect_set_header_candidates(rows, blocks_by_id, args.min_anchor_score)
     anchor_candidates, selected_anchors = detect_anchor_candidates(
@@ -1385,7 +1492,7 @@ def build_stream(args: argparse.Namespace, run_dir: Path) -> dict[str, Any]:
         },
         "status": "partial_interrupted" if interrupted else "complete",
         "interrupted": interrupted,
-        "processed_pages": processed_pages,
+        "processed_pages": processed_pages_from_ocr_blocks(pages, ocr_blocks),
         "blocks": [asdict(block) for block in blocks],
         "rows": [asdict(row) for row in rows],
         "set_header_candidates": [asdict(anchor) for anchor in set_header_candidates],
@@ -1396,6 +1503,31 @@ def build_stream(args: argparse.Namespace, run_dir: Path) -> dict[str, Any]:
         "annotated_block_paths": annotated_paths,
         "ocr_errors": ocr_errors,
     }
+
+
+def build_stream(args: argparse.Namespace, run_dir: Path) -> dict[str, Any]:
+    raw_blocks: list[RawBlock] = []
+    ocr_blocks: list[OcrBlock] = []
+    ocr_errors: list[dict[str, Any]] = []
+    interrupted = False
+
+    try:
+        raw_blocks = prepare_page_column_blocks(args, run_dir)
+        ocr_blocks, ocr_errors = run_ocr_for_blocks(raw_blocks, args, run_dir)
+    except KeyboardInterrupt:
+        interrupted = True
+        print("\nInterrupted; writing partial suggestions for completed OCR blocks...")
+
+    blocks, rows = build_stream_from_ocr_blocks(ocr_blocks, args)
+    return build_suggestions_payload(
+        args,
+        run_dir,
+        blocks,
+        rows,
+        ocr_blocks,
+        ocr_errors,
+        interrupted=interrupted,
+    )
 
 
 def write_suggestions(run_dir: Path, payload: dict[str, Any]) -> Path:
