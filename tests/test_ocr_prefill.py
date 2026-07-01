@@ -71,10 +71,183 @@ def test_passage_prefill_uses_raw_ocr_body(tmp_path: Path) -> None:
 
     passage = state.candidates[0]
     assert passage.raw_ocr_text == "첫 줄\n둘째 줄"
-    assert passage.verified_text == "첫 줄 둘째 줄"
+    assert passage.verified_text == "첫 줄\n둘째 줄"
     assert passage.ocr_draft_text == "첫 줄\n둘째 줄"
     assert passage.prefill_source == "ocr_heuristic"
-    assert "joined_forced_line_breaks" in passage.correction_steps
+    assert "joined_forced_line_breaks" not in passage.correction_steps
+
+
+def test_passage_prefill_preserves_blank_ocr_rows_from_suggestions(tmp_path: Path) -> None:
+    suggestions_path = write_suggestion_run(
+        tmp_path,
+        passage_text="Alpha line one\nAlpha line two\n\nBeta line one\nBeta line two",
+        question_text="Question 1",
+    )
+
+    state = initialize_review_state("leet-2026-verbal-even", suggestions_path, data_root=tmp_path / "data")
+
+    passage = state.candidates[0]
+    assert passage.raw_ocr_text == "Alpha line one\nAlpha line two\n\nBeta line one\nBeta line two"
+    assert passage.verified_text == "Alpha line one\nAlpha line two\n\nBeta line one\nBeta line two"
+
+
+def test_passage_prefill_preserves_indented_paragraph_starts_from_ocr_rows(tmp_path: Path) -> None:
+    run_dir = tmp_path / "artifacts" / "question_crop_suggestions" / "run"
+    (run_dir / "set_01_03_passage_candidate").mkdir(parents=True)
+    (run_dir / "q01_candidate").mkdir(parents=True)
+    (run_dir / "set_01_03_passage_candidate" / "set_01_03_passage_candidate_preview.png").write_bytes(b"preview")
+    (run_dir / "q01_candidate" / "q01_candidate_preview.png").write_bytes(b"preview")
+    rows = [
+        {"row_index": 0, "text": "Header", "local_bbox": [100, 10, 900, 40]},
+        {"row_index": 1, "text": "First paragraph line one", "local_bbox": [140, 60, 900, 90]},
+        {"row_index": 2, "text": "First paragraph line two", "local_bbox": [100, 110, 900, 140]},
+        {"row_index": 3, "text": "Second paragraph line one", "local_bbox": [140, 160, 900, 190]},
+        {"row_index": 4, "text": "Second paragraph line two", "local_bbox": [100, 210, 900, 240]},
+        {"row_index": 5, "text": "Question 1", "local_bbox": [100, 260, 900, 290]},
+    ]
+    (run_dir / "page_001_left.paddleocr.json").write_text(json.dumps({"rows": rows}), encoding="utf-8")
+    payload = {
+        "artifact_type": "candidate_question_crop_suggestions",
+        "suggestions": [
+            {
+                "suggestion_id": "set_01_03_passage",
+                "kind": "candidate_passage_crop_suggestion",
+                "start_question": 1,
+                "end_question": 3,
+                "candidate_preview_path": "set_01_03_passage_candidate/set_01_03_passage_candidate_preview.png",
+                "parts": [
+                    {
+                        "page": 1,
+                        "column": "left",
+                        "block_id": "p001_left",
+                        "included_row_ids": [f"p001_left_r{index:03d}" for index in range(5)],
+                    }
+                ],
+            },
+            {
+                "suggestion_id": "q01",
+                "kind": "candidate_question_crop_suggestion",
+                "question_number": 1,
+                "candidate_preview_path": "q01_candidate/q01_candidate_preview.png",
+                "parts": [
+                    {
+                        "page": 1,
+                        "column": "left",
+                        "block_id": "p001_left",
+                        "included_row_ids": ["p001_left_r005"],
+                    }
+                ],
+            },
+        ],
+    }
+    suggestions_path = run_dir / "suggestions.json"
+    suggestions_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    state = initialize_review_state("leet-2026-verbal-even", suggestions_path, data_root=tmp_path / "data")
+
+    passage = state.candidates[0]
+    assert passage.raw_ocr_text == (
+        "Header\n\nFirst paragraph line one\nFirst paragraph line two\n\n"
+        "Second paragraph line one\nSecond paragraph line two"
+    )
+    assert passage.verified_text == (
+        "Header\n\nFirst paragraph line one\nFirst paragraph line two\n\n"
+        "Second paragraph line one\nSecond paragraph line two"
+    )
+
+
+def test_passage_prefill_excludes_included_edge_header_fragments(tmp_path: Path) -> None:
+    run_dir = tmp_path / "artifacts" / "question_crop_suggestions" / "run"
+    (run_dir / "set_01_03_passage_candidate").mkdir(parents=True)
+    (run_dir / "set_01_03_passage_candidate" / "set_01_03_passage_candidate_preview.png").write_bytes(b"preview")
+    rows = [
+        {"row_index": 0, "text": "\uadf8\ud638", "local_bbox": [0, 595, 93, 681]},
+        {"row_index": 1, "text": "Passage starts here", "local_bbox": [87, 768, 1312, 834]},
+        {"row_index": 2, "text": "Passage continues", "local_bbox": [48, 847, 1314, 906]},
+    ]
+    (run_dir / "page_001_right.paddleocr.json").write_text(
+        json.dumps({"local_size": [1392, 4415], "rows": rows}),
+        encoding="utf-8",
+    )
+    payload = {
+        "artifact_type": "candidate_question_crop_suggestions",
+        "suggestions": [
+            {
+                "suggestion_id": "set_01_03_passage",
+                "kind": "candidate_passage_crop_suggestion",
+                "start_question": 1,
+                "end_question": 3,
+                "candidate_preview_path": "set_01_03_passage_candidate/set_01_03_passage_candidate_preview.png",
+                "parts": [
+                    {
+                        "page": 1,
+                        "column": "right",
+                        "block_id": "p001_right",
+                        "included_row_ids": ["p001_right_r000", "p001_right_r001", "p001_right_r002"],
+                    }
+                ],
+            }
+        ],
+    }
+    suggestions_path = run_dir / "suggestions.json"
+    suggestions_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    state = initialize_review_state("leet-2026-verbal-even", suggestions_path, data_root=tmp_path / "data")
+
+    passage = state.candidates[0]
+    assert "\uadf8\ud638" not in passage.raw_ocr_text
+    assert passage.verified_text == "Passage starts here\nPassage continues"
+
+
+def test_question_prefill_recovers_omitted_choice_marker_inside_crop_bbox(tmp_path: Path) -> None:
+    run_dir = tmp_path / "artifacts" / "question_crop_suggestions" / "run"
+    (run_dir / "q02_candidate").mkdir(parents=True)
+    (run_dir / "q02_candidate" / "q02_candidate_preview.png").write_bytes(b"preview")
+    rows = [
+        {"row_index": 0, "text": "2. Question stem?", "local_bbox": [100, 10, 900, 40]},
+        {"row_index": 1, "text": "1 Choice one", "local_bbox": [100, 60, 900, 90]},
+        {"row_index": 2, "text": "2", "local_bbox": [100, 110, 130, 140]},
+        {"row_index": 3, "text": "Choice two", "local_bbox": [150, 110, 900, 140]},
+        {"row_index": 4, "text": "3Choice three", "local_bbox": [100, 160, 900, 190]},
+        {"row_index": 5, "text": "4Choice four", "local_bbox": [100, 210, 900, 240]},
+        {"row_index": 6, "text": "5Choice five", "local_bbox": [100, 260, 900, 290]},
+    ]
+    (run_dir / "page_002_left.paddleocr.json").write_text(json.dumps({"rows": rows}), encoding="utf-8")
+    payload = {
+        "artifact_type": "candidate_question_crop_suggestions",
+        "suggestions": [
+            {
+                "suggestion_id": "q02",
+                "kind": "candidate_question_crop_suggestion",
+                "question_number": 2,
+                "candidate_preview_path": "q02_candidate/q02_candidate_preview.png",
+                "parts": [
+                    {
+                        "page": 2,
+                        "column": "left",
+                        "block_id": "p002_left",
+                        "local_crop_bbox": [80, 0, 920, 300],
+                        "included_row_ids": [
+                            "p002_left_r000",
+                            "p002_left_r001",
+                            "p002_left_r003",
+                            "p002_left_r004",
+                            "p002_left_r005",
+                            "p002_left_r006",
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    suggestions_path = run_dir / "suggestions.json"
+    suggestions_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    state = initialize_review_state("leet-2026-verbal-even", suggestions_path, data_root=tmp_path / "data")
+
+    question = state.candidates[0]
+    assert question.raw_ocr_text == "2. Question stem?\n1 Choice one\n2\nChoice two\n3Choice three\n4Choice four\n5Choice five"
+    assert question.choices == ["Choice one", "Choice two", "Choice three", "Choice four", "Choice five"]
 
 
 def test_passage_prefill_separates_standard_header_from_body() -> None:
@@ -82,7 +255,7 @@ def test_passage_prefill_separates_standard_header_from_body() -> None:
 
     draft = generate_ocr_draft(CandidateType.PASSAGE, raw)
 
-    assert draft.verified_text == "[1~3] 다음 글을 읽고 물음에 답하시오.\n\n문학이 사회를 반영한다. 법의 영역에도 적용된다."
+    assert draft.verified_text == "[1~3] 다음 글을 읽고 물음에 답하시오.\n\n문학이 사회를 반영한다.\n법의 영역에도 적용된다."
     assert "formatted_passage_header_break" in draft.correction_steps
 
 
@@ -91,8 +264,65 @@ def test_passage_prefill_separates_header_even_without_question_range() -> None:
 
     draft = generate_ocr_draft(CandidateType.PASSAGE, raw)
 
-    assert draft.verified_text == "다음 글을 읽고 물음에 답하시오.\n\n첫 문장 둘째 문장"
+    assert draft.verified_text == "다음 글을 읽고 물음에 답하시오.\n\n첫 문장\n둘째 문장"
     assert "formatted_passage_header_break" in draft.correction_steps
+
+
+def test_passage_prefill_preserves_blank_line_paragraph_breaks() -> None:
+    raw = "Alpha line one\nAlpha line two\n\nBeta line one\nBeta line two"
+
+    draft = generate_ocr_draft(CandidateType.PASSAGE, raw)
+
+    assert draft.verified_text == "Alpha line one\nAlpha line two\n\nBeta line one\nBeta line two"
+    assert "joined_forced_line_breaks" not in draft.correction_steps
+
+
+def test_passage_prefill_joins_korean_words_split_by_line_wraps() -> None:
+    raw = (
+        "진실을 다\n룰 능력\n존재\n한다는 주장\n그러\n나 전자는\n믿\n는 바\n법적\n으로 인정\n무효로\n할 근거\n"
+        "보장하는\n해석론\n현대의\n민주국가"
+    )
+
+    draft = generate_ocr_draft(CandidateType.PASSAGE, raw)
+
+    assert (
+        draft.verified_text
+        == "진실을 다룰 능력\n존재한다는 주장\n그러나 전자는\n믿는 바\n법적으로 인정\n무효로\n할 근거\n보장하는\n해석론\n현대의\n민주국가"
+    )
+    assert "joined_forced_line_breaks" in draft.correction_steps
+
+
+def test_passage_prefill_preserves_script_rows() -> None:
+    raw = (
+        "(나)\n"
+        "[부산에 도착한 첫날 밤 세 가족은 파티를 연다.]\n"
+        "창수댁:(한쪽이 터진 트렁크를 들고)여보,이것 좀 보세요.뚜껑\n"
+        "을 덮으니까 또 터지겠죠.(돌아보지 않는 창수를 보고)\n"
+        "아니 여보,당신은 남의 것을 보듯 거들떠보지도 않는구려.\n"
+        "(창수, 외면하고 서 있다.)\n"
+        "창 수:인젠 제에발 그 구질구질한 짐짝을 끌구 다니지 말자구\n"
+        "했잖소.[] 바다 깊이 때 묻은 과거를 수장해 버리란\n"
+        "말요.새로운 옷을 입으려거든 낡은 것을 미련 없이 벗어\n"
+        "버려야하는 거야.\n"
+        "모 두:(술잔을 쳐들고) 브라보!\n"
+        "-김자림,[이민선]-"
+    )
+
+    draft = generate_ocr_draft(CandidateType.PASSAGE, raw)
+
+    assert draft.verified_text == (
+        "(나)\n"
+        "[부산에 도착한 첫날 밤 세 가족은 파티를 연다.]\n"
+        "창수댁: (한쪽이 터진 트렁크를 들고)여보, 이것 좀 보세요. 뚜껑을 덮으니까 또 터지겠죠.(돌아보지 않는 창수를 보고)\n"
+        "아니 여보, 당신은 남의 것을 보듯 거들떠보지도 않는구려.\n"
+        "(창수, 외면하고 서 있다.)\n"
+        "창 수: 인젠 제에발 그 구질구질한 짐짝을 끌구 다니지 말자구\n"
+        "했잖소.[] 바다 깊이 때 묻은 과거를 수장해 버리란\n"
+        "말요. 새로운 옷을 입으려거든 낡은 것을 미련 없이 벗어\n"
+        "버려야하는 거야.\n"
+        "모 두: (술잔을 쳐들고) 브라보!\n"
+        "-김자림, [이민선]-"
+    )
 
 
 def test_question_prefill_splits_circled_choice_markers() -> None:
@@ -135,6 +365,35 @@ def test_question_prefill_normalizes_punctuation_spacing_without_changing_number
     assert "normalized_punctuation_spacing" in draft.correction_steps
 
 
+def test_question_prefill_preserves_view_heading_and_item_paragraphs() -> None:
+    raw = (
+        "14. \ubb38\uc81c \uc9c8\ubb38\n"
+        "<\ubcf4\uae30>\uc5d0\uc11c\n"
+        "\uc788\ub294 \ub300\ub85c \uace0\ub978 \uac83\uc740?\n"
+        "<\ubcf4 \uae30>\n"
+        "\u3131. \uccab \ubb38\uc7a5\n"
+        "\uc774\uc5b4\uc9c4 \ubb38\uc7a5\n"
+        "\u3134. \ub458\uc9f8 \ubb38\uc7a5\n"
+        "\uc774\uc5b4\uc9d0\n"
+        "\u3137. \uc14b\uc9f8 \ubb38\uc7a5\n"
+        "1 \u3131\n"
+        "2 \u3134\n"
+        "3 \u3137\n"
+        "4 \u3131, \u3134\n"
+        "5 \u3131, \u3134, \u3137"
+    )
+
+    draft = generate_ocr_draft(CandidateType.QUESTION, raw, question_number=14)
+
+    assert draft.stem == (
+        "\ubb38\uc81c \uc9c8\ubb38 <\ubcf4\uae30>\uc5d0\uc11c \uc788\ub294 \ub300\ub85c \uace0\ub978 \uac83\uc740?\n"
+        "<\ubcf4 \uae30>\n"
+        "\u3131. \uccab \ubb38\uc7a5 \uc774\uc5b4\uc9c4 \ubb38\uc7a5\n"
+        "\u3134. \ub458\uc9f8 \ubb38\uc7a5 \uc774\uc5b4\uc9d0\n"
+        "\u3137. \uc14b\uc9f8 \ubb38\uc7a5"
+    )
+
+
 def test_question_number_five_is_not_treated_as_choice_five() -> None:
     raw = "5. 다음 글에 대한 설명으로 옳은 것은?\n1. 첫째\n2. 둘째\n3. 셋째\n4. 넷째\n5. 다섯째"
 
@@ -167,6 +426,27 @@ def test_question_prefill_splits_mixed_circled_and_bare_numeric_choice_markers()
     assert draft.choices[3].startswith("\ucd5c\uc0c1\uc704\uc758 \uc758\uc0ac\uacb0\uc815")
     assert draft.choices[4].startswith("\uc758\uc0ac\uacb0\uc815 \ub178\ub4dc\uac00")
     assert not draft.warnings
+
+
+def test_question_prefill_continues_after_missing_middle_choice_marker() -> None:
+    raw = (
+        "2. Question stem?\n"
+        "1 Choice one\n"
+        "Choice two text with missing marker\n"
+        "3Choice three\n"
+        "4Choice four\n"
+        "5Choice five"
+    )
+
+    draft = generate_ocr_draft(CandidateType.QUESTION, raw, question_number=2)
+
+    assert draft.choices[0] == "Choice one Choice two text with missing marker"
+    assert draft.choices[1] == ""
+    assert draft.choices[2] == "Choice three"
+    assert draft.choices[3] == "Choice four"
+    assert draft.choices[4] == "Choice five"
+    assert "choices_detected_4" in draft.warnings
+    assert "ignored_out_of_sequence_choice_markers:2" in draft.warnings
 
 
 def test_out_of_sequence_numeric_marker_stays_in_stem_before_choices_start() -> None:

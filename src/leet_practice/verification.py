@@ -250,6 +250,12 @@ def _candidate_type(kind: str) -> CandidateType | None:
 CHOICE_MARKER_RE = re.compile(
     r"^\s*(?P<marker>[\u2460-\u2464]|[1-5][.)\uff0e\uff09]|[(\uff08][1-5][)\uff09]|[1-5])\s*(?P<text>.*)$"
 )
+VIEW_HEADING_RE = re.compile(r"^<\s*\ubcf4\s*\uae30\s*>$")
+VIEW_ITEM_MARKER_RE = re.compile(r"^(?:[\u3131-\u314e]|7)\s*[.)]\s*")
+PASSAGE_HEADER_RE = re.compile(
+    r"(?P<header>(?:\[\s*\d+\s*[~～-]\s*\d+\s*\]\s*)?다음\s+글을\s+읽고\s+물음에\s+답하시오\.)\s*"
+)
+PASSAGE_HEADER_STEP = "formatted_passage_header_break"
 CHOICE_MARKER_TO_INDEX = {
     "\u2460": 1,
     "\u2461": 2,
@@ -298,12 +304,143 @@ def _clean_lines(text: str) -> list[str]:
     return [line.strip() for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n") if line.strip()]
 
 
+KOREAN_CONTINUATION_EXACT = {
+    "\uac00",
+    "\uace0",
+    "\ub098",
+    "\ub294",
+    "\ub3c4",
+    "\ub97c",
+    "\ub8f0",
+    "\ub85c",
+    "\ub9cc",
+    "\uba70",
+    "\ub294",
+    "\uc640",
+    "\uc73c\ub85c",
+    "\uc740",
+    "\uc744",
+    "\uc758",
+    "\uc774",
+}
+KOREAN_CONTINUATION_PREFIXES = (
+    "\ud558",
+    "\ud55c",
+    "\ub418",
+    "\ub41c",
+    "\ub420",
+    "\ub418\ub294",
+    "\ub418\uc9c0",
+    "\uc5d0\uac8c",
+    "\uc5d0\uc11c",
+    "\ubd80\ud130",
+    "\uae4c\uc9c0",
+    "\ucc98\ub7fc",
+    "\ubcf4\ub2e4",
+    "\uc870\ucc28",
+    "\ub9c8\uc800",
+    "\ub77c\ub3c4",
+    "\uc774\ub77c",
+    "\uc774\ub098",
+)
+HEADER_FOOTER_EDGE_TEXT_RE = re.compile(
+    r"^(?:"
+    r"\uc5b8\uc5b4|\uc774\ud574|\uc5b8\d+|"
+    r"\ucd94\ub9ac|\ub17c\uc99d|\ub17c\uc220|"
+    r"\ud640\uc218\ud615|\uc9dd\uc218\ud615|"
+    r"\uc131\uba85|\uc218\ud5d8|\ubc88\ud638|\uc218\ud5d8\ubc88\ud638|\uad50\uc2dc|"
+    r"\d+\s*\ud638|\uadf8\ud638"
+    r")$"
+)
+HEADER_FOOTER_TOP_EDGE_RATIO = 0.18
+HEADER_FOOTER_BOTTOM_EDGE_RATIO = 0.92
+
+
+def _is_korean_continuation(prev_line: str, next_line: str) -> bool:
+    prev = prev_line.rstrip()
+    next_text = next_line.lstrip()
+    if not prev or not next_text or not re.search(r"[\uac00-\ud7a3]$", prev):
+        return False
+    if re.search(r"[.!?\u3002\uff01\uff1f\"')\]\}]\s*$", prev):
+        return False
+    first_token = next_text.split(maxsplit=1)[0]
+    return first_token in KOREAN_CONTINUATION_EXACT or first_token.startswith(KOREAN_CONTINUATION_PREFIXES)
+
+
+def _join_wrapped_pair(left: str, right: str) -> str:
+    left = left.strip()
+    right = right.strip()
+    if not left:
+        return right
+    if not right:
+        return left
+    separator = "" if _is_korean_continuation(left, right) else " "
+    return f"{left}{separator}{right}"
+
+
 def _join_wrapped_lines(lines: list[str]) -> str:
-    return " ".join(line.strip() for line in lines if line.strip())
+    joined = ""
+    for line in lines:
+        if not line.strip():
+            continue
+        joined = _join_wrapped_pair(joined, line) if joined else line.strip()
+    return joined
 
 
 def _join_wrapped_text(text: str) -> str:
-    return _join_wrapped_lines(_clean_lines(text))
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    paragraphs = re.split(r"\n\s*\n+", normalized)
+    joined = [_join_obvious_line_wraps(paragraph.split("\n")) for paragraph in paragraphs]
+    return "\n\n".join(paragraph for paragraph in joined if paragraph)
+
+
+def _join_obvious_line_wraps(lines: list[str]) -> str:
+    joined: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if joined and _is_korean_continuation(joined[-1], stripped):
+            joined[-1] = _join_wrapped_pair(joined[-1], stripped)
+        else:
+            joined.append(stripped)
+    return "\n".join(joined)
+
+
+def _format_passage_header_break(text: str) -> str:
+    match = PASSAGE_HEADER_RE.search(text)
+    if match is None or match.start() > 80:
+        return text
+    body = text[match.end() :]
+    if not body.strip():
+        return text
+    return text[: match.start()] + match.group("header").strip() + "\n\n" + body.lstrip()
+
+
+def _join_question_stem_lines(lines: list[str]) -> str:
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    in_view_block = False
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if VIEW_HEADING_RE.fullmatch(stripped):
+            if current:
+                blocks.append(current)
+            blocks.append([stripped])
+            current = []
+            in_view_block = True
+            continue
+        if in_view_block and VIEW_ITEM_MARKER_RE.match(stripped):
+            if current:
+                blocks.append(current)
+            current = [stripped]
+            continue
+        current.append(stripped)
+    if current:
+        blocks.append(current)
+    return "\n".join(_join_wrapped_lines(block) for block in blocks if block)
 
 
 def _normalize_punctuation_spacing(text: str) -> str:
@@ -431,6 +568,10 @@ def generate_ocr_draft(
         steps.append("joined_forced_line_breaks")
 
     if candidate_type == CandidateType.PASSAGE:
+        formatted_text = _format_passage_header_break(joined_text)
+        if formatted_text != joined_text:
+            joined_text = formatted_text
+            steps.append(PASSAGE_HEADER_STEP)
         return OcrDraft(
             draft_text=text,
             verified_text=joined_text,
@@ -458,12 +599,15 @@ def generate_ocr_draft(
                 continue
             expected_index = 1 if not choice_lines else max(choice_lines) + 1
             if index != expected_index and not (index in choice_lines and _is_circled_choice_marker(match.group("marker"))):
-                ignored_markers.append(index)
-                if current_choice is not None:
-                    choice_lines[current_choice].append(line)
+                if choice_lines and index > expected_index:
+                    ignored_markers.extend(range(expected_index, index))
                 else:
-                    stem_lines.append(line)
-                continue
+                    ignored_markers.append(index)
+                    if current_choice is not None:
+                        choice_lines[current_choice].append(line)
+                    else:
+                        stem_lines.append(line)
+                    continue
             if index in choice_lines:
                 duplicate_choices.add(index)
             choice_lines.setdefault(index, [])
@@ -494,7 +638,7 @@ def generate_ocr_draft(
 
     return OcrDraft(
         draft_text=text,
-        stem=_join_wrapped_lines(stem_lines),
+        stem=_join_question_stem_lines(stem_lines),
         choices=choices,
         warnings=warnings,
         correction_steps=steps,
@@ -536,11 +680,73 @@ def _ocr_json_path_for_part(part: dict[str, Any], suggestions_dir: Path) -> Path
     return suggestions_dir / f"page_{page:03d}_{column}.paddleocr.json"
 
 
+def _row_center_in_bbox(row: dict[str, Any], bbox: list[Any] | None) -> bool:
+    if not bbox or len(bbox) != 4:
+        return False
+    row_bbox = row.get("local_bbox")
+    if not isinstance(row_bbox, list) or len(row_bbox) != 4:
+        return False
+    try:
+        crop_left, crop_top, crop_right, crop_bottom = [float(value) for value in bbox]
+        row_left, row_top, row_right, row_bottom = [float(value) for value in row_bbox]
+    except (TypeError, ValueError):
+        return False
+    center_x = (row_left + row_right) / 2
+    center_y = (row_top + row_bottom) / 2
+    return crop_left <= center_x <= crop_right and crop_top <= center_y <= crop_bottom
+
+
+def _row_left(row: dict[str, Any]) -> float | None:
+    row_bbox = row.get("local_bbox")
+    if not isinstance(row_bbox, list) or len(row_bbox) != 4:
+        return None
+    try:
+        return float(row_bbox[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_header_footer_artifact(row: dict[str, Any], payload: dict[str, Any]) -> bool:
+    text = re.sub(r"\s+", " ", str(row.get("text") or "")).strip()
+    if not text:
+        return False
+    row_bbox = row.get("local_bbox")
+    local_size = payload.get("local_size")
+    if not isinstance(row_bbox, list) or len(row_bbox) != 4:
+        return False
+    if not isinstance(local_size, list) or len(local_size) != 2:
+        return False
+    try:
+        height = float(local_size[1])
+        row_top = float(row_bbox[1])
+        row_bottom = float(row_bbox[3])
+    except (TypeError, ValueError):
+        return False
+    near_top = row_top <= height * HEADER_FOOTER_TOP_EDGE_RATIO
+    near_bottom = row_bottom >= height * HEADER_FOOTER_BOTTOM_EDGE_RATIO
+    return (near_top or near_bottom) and bool(HEADER_FOOTER_EDGE_TEXT_RE.fullmatch(text))
+
+
+def _body_left_for_rows(rows: list[dict[str, Any]]) -> float | None:
+    lefts = sorted(left for row in rows if (left := _row_left(row)) is not None)
+    if not lefts:
+        return None
+    return lefts[len(lefts) // 2]
+
+
+def _is_indented_paragraph_start(row: dict[str, Any], body_left: float | None) -> bool:
+    left = _row_left(row)
+    if left is None or body_left is None:
+        return False
+    return left - body_left >= 30
+
+
 def collect_raw_ocr_text(candidate: dict[str, Any], suggestions_dir: Path) -> str:
     """Collect compact OCR text for the rows included in candidate crop parts."""
 
     lines: list[str] = []
     seen: set[tuple[Path, int]] = set()
+    is_passage = _candidate_type(str(candidate.get("kind") or "")) == CandidateType.PASSAGE
     for part in candidate.get("parts") or []:
         if not isinstance(part, dict):
             continue
@@ -553,16 +759,24 @@ def collect_raw_ocr_text(candidate: dict[str, Any], suggestions_dir: Path) -> st
         row_indices = _row_indices(list(part.get("included_row_ids") or []))
         if not row_indices:
             continue
+        crop_bbox = part.get("local_crop_bbox")
         payload = _read_json(ocr_path)
         rows = payload.get("rows") or []
+        part_rows: list[dict[str, Any]] = []
         for row in rows:
             row_index = row.get("row_index")
-            if row_index not in row_indices or (ocr_path, row_index) in seen:
+            if (row_index not in row_indices and not _row_center_in_bbox(row, crop_bbox)) or (ocr_path, row_index) in seen:
+                continue
+            if _is_header_footer_artifact(row, payload):
                 continue
             seen.add((ocr_path, row_index))
+            part_rows.append(row)
+        body_left = _body_left_for_rows(part_rows) if is_passage else None
+        for row in part_rows:
             text = str(row.get("text") or "").strip()
-            if text:
-                lines.append(text)
+            if text and is_passage and lines and lines[-1] != "" and _is_indented_paragraph_start(row, body_left):
+                lines.append("")
+            lines.append(text)
     return "\n".join(lines)
 
 
