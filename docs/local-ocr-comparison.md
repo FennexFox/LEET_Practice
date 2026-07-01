@@ -2,7 +2,7 @@
 
 Use `tools/compare_ocr_engines.py` to run PaddleOCR on LEET page images or rendered PDF pages.
 
-Use `tools/suggest_question_crops.py` for the next automation step: generating
+Use `leet-practice ocr` for the next automation step: generating
 candidate question crop suggestions from OCR rows in page-column reading order.
 
 ## Install dependencies with uv
@@ -33,14 +33,14 @@ uv pip install "paddlepaddle==3.1.1"
 Place a local PDF here:
 
 ```text
-data/raw_pdfs/leet-2026-verbal-even/paper.pdf
+data/raw_pdfs/leet-2026-verbal-even.pdf
 ```
 
 Then run:
 
 ```powershell
 uv run python tools/compare_ocr_engines.py `
-  --pdf "data/raw_pdfs/leet-2026-verbal-even/paper.pdf" `
+  --pdf "data/raw_pdfs/leet-2026-verbal-even.pdf" `
   --page 1 `
   --split-columns
 ```
@@ -49,7 +49,7 @@ For the Windows GPU workflow, use:
 
 ```powershell
 uv run python tools/compare_ocr_engines.py `
-  --pdf "data/raw_pdfs/leet-2026-verbal-even/paper.pdf" `
+  --pdf "data/raw_pdfs/leet-2026-verbal-even.pdf" `
   --page 1 `
   --split-columns `
   --paddle-device gpu:0 `
@@ -80,13 +80,18 @@ manifest.json
 ## Suggest candidate question crops
 
 After PaddleOCR is installed and working, run the question crop suggestion tool
-over a page range:
+over a page range. By default, this reads
+`data/raw_pdfs/<exam_id>.pdf` and writes under
+`artifacts/question_crop_suggestions/`:
 
 ```powershell
-uv run python tools/suggest_question_crops.py `
-  --pdf "data/raw_pdfs/leet-2026-verbal-even/paper.pdf" `
-  --pages 1-10 `
-  --run-id leet-2026-verbal-even-p001-010 `
+leet-practice ocr leet-2026-verbal-even 1-10
+```
+
+For the Windows GPU workflow, add only the GPU-specific options:
+
+```powershell
+leet-practice ocr leet-2026-verbal-even 1-10 `
   --paddle-device gpu:0 `
   --paddle-preimport-paddle
 ```
@@ -172,7 +177,7 @@ The default PaddleOCR language is `korean`. If that fails in the installed versi
 
 ```powershell
 uv run python tools/compare_ocr_engines.py `
-  --pdf "data/raw_pdfs/leet-2026-verbal-even/paper.pdf" `
+  --pdf "data/raw_pdfs/leet-2026-verbal-even.pdf" `
   --page 1 `
   --paddle-lang ko
 ```
@@ -191,7 +196,7 @@ If you want to test the raw PaddleOCR defaults again, explicitly re-enable them:
 
 ```powershell
 uv run python tools/compare_ocr_engines.py `
-  --pdf "data/raw_pdfs/leet-2026-verbal-even/paper.pdf" `
+  --pdf "data/raw_pdfs/leet-2026-verbal-even.pdf" `
   --page 1 `
   --split-columns `
   --no-paddle-disable-mkldnn `

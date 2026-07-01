@@ -33,9 +33,8 @@ Local official PDF files.
 Example:
 
 ```text
-data/raw_pdfs/leet-2026-verbal-even/
-  paper.pdf
-  answers.pdf
+data/raw_pdfs/leet-2026-verbal-even.pdf
+data/raw_pdfs/leet-2026-verbal-even-answers.pdf
 ```
 
 Do not commit these files unless you have a clear legal reason to do so.
