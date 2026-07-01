@@ -776,10 +776,10 @@ def collect_raw_ocr_text(candidate: dict[str, Any], suggestions_dir: Path) -> st
             continue
         if not ocr_path.exists():
             continue
-        row_indices = _row_indices(list(part.get("included_row_ids") or []))
-        if not row_indices:
-            continue
         crop_bbox = part.get("local_crop_bbox")
+        row_indices = _row_indices(list(part.get("included_row_ids") or []))
+        if not row_indices and not crop_bbox:
+            continue
         payload = _read_json(ocr_path)
         rows = payload.get("rows") or []
         part_rows: list[dict[str, Any]] = []
@@ -885,6 +885,10 @@ def _has_review_edits(candidate: ReviewCandidate) -> bool:
     )
 
 
+_REVIEW_DECISION_FIELDS = ("status", "correct_answer", "notes")
+_OCR_DRAFT_EDITABLE_FIELDS = ("verified_text", "stem", "choices")
+
+
 def _preserve_review_edits(fresh: ReviewState, existing: ReviewState) -> ReviewState:
     existing_by_id = {candidate.candidate_id: candidate for candidate in existing.candidates}
     merged_candidates: list[ReviewCandidate] = []
@@ -894,20 +898,12 @@ def _preserve_review_edits(fresh: ReviewState, existing: ReviewState) -> ReviewS
             merged_candidates.append(fresh_candidate)
             continue
         patch = fresh_candidate.model_dump()
-        for key in (
-            "status",
-            "question_number",
-            "start_question",
-            "end_question",
-            "verified_text",
-            "stem",
-            "choices",
-            "correct_answer",
-            "passage_id",
-            "notes",
-            "manually_edited",
-        ):
+        for key in _REVIEW_DECISION_FIELDS:
             patch[key] = getattr(existing_candidate, key)
+        if existing_candidate.manually_edited:
+            for key in _OCR_DRAFT_EDITABLE_FIELDS:
+                patch[key] = getattr(existing_candidate, key)
+            patch["manually_edited"] = True
         merged_candidates.append(ReviewCandidate.model_validate(patch))
     fresh.candidates = merged_candidates
     return fresh
@@ -998,9 +994,12 @@ def update_candidate(
         for key, value in updates.items():
             if key in allowed:
                 patch[key] = value
-        if any(key in allowed for key in updates):
-            patch["manually_edited"] = True
         updated = ReviewCandidate.model_validate(patch)
+        if any(
+            key in updates and getattr(updated, key) != getattr(candidate, key)
+            for key in _OCR_DRAFT_EDITABLE_FIELDS
+        ):
+            updated = updated.model_copy(update={"manually_edited": True})
         index = state.candidates.index(candidate)
         state.candidates[index] = updated
         if updated.candidate_type == CandidateType.PASSAGE and updated.start_question and updated.end_question:
@@ -1342,6 +1341,23 @@ def workbench_html() -> str:
       const value = document.getElementById(id).value;
       return value ? Number(value) : null;
     }
+    function editableFormValues(candidate) {
+      if (candidate?.candidate_type === "passage") {
+        return {verified_text: document.getElementById("verified_text").value};
+      }
+      return {
+        stem: document.getElementById("stem").value,
+        choices: [0,1,2,3,4].map(i => document.getElementById(`choice_${i}`).value)
+      };
+    }
+    function hasUnsavedEditableEdits(candidate) {
+      const values = editableFormValues(candidate);
+      if (candidate?.candidate_type === "passage") {
+        return values.verified_text !== (candidate.verified_text || "");
+      }
+      const savedChoices = candidate?.choices || [];
+      return values.stem !== (candidate?.stem || "") || values.choices.some((value, index) => value !== (savedChoices[index] || ""));
+    }
     function scheduleAutosave() {
       clearTimeout(autosaveTimer);
       autosaveTimer = setTimeout(() => save({reload: false}), 700);
@@ -1386,9 +1402,9 @@ def workbench_html() -> str:
     document.getElementById("save").onclick = save;
     document.getElementById("applyDraft").onclick = async () => {
       if (!current) return;
-      const hasEdits = current.candidate_type === "passage"
-        ? Boolean(document.getElementById("verified_text").value.trim())
-        : Boolean(document.getElementById("stem").value.trim() || [0,1,2,3,4].some(i => document.getElementById(`choice_${i}`).value.trim()));
+      clearTimeout(autosaveTimer);
+      autosaveTimer = null;
+      const hasEdits = current.manually_edited || hasUnsavedEditableEdits(current);
       if (hasEdits && !confirm("Replace current editable fields with the OCR draft?")) return;
       const candidateId = current.candidate_id;
       const response = await fetch(`/api/candidates/${encodeURIComponent(candidateId)}/apply-ocr-draft`, {method: "POST"});

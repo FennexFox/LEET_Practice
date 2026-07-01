@@ -87,6 +87,9 @@ def review_crops(
     """Review OCR crop suggestions in a local browser workbench."""
 
     try:
+        if overwrite and refresh_preserving_edits:
+            console.print("[red]--overwrite and --refresh-preserving-edits cannot be combined.[/red]")
+            raise typer.Exit(1)
         state = initialize_review_state(
             exam_id,
             suggestions,

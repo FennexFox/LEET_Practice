@@ -135,6 +135,12 @@ def test_refresh_preserving_edits_keeps_touched_candidates_and_refreshes_untouch
         {"status": "needs_fix", "verified_text": "Manual passage"},
         data_root=data_root,
     )
+    update_candidate(
+        "leet-2026-verbal-even",
+        "q01",
+        {"status": "needs_fix", "notes": "review decision only"},
+        data_root=data_root,
+    )
 
     payload = json.loads(suggestions_path.read_text(encoding="utf-8"))
     ocr_path = suggestions_path.parent / "page_001_left.paddleocr.json"
@@ -160,4 +166,34 @@ def test_refresh_preserving_edits_keeps_touched_candidates_and_refreshes_untouch
     assert question.raw_ocr_text == "1. New question?\n1) A\n2) B\n3) C\n4) D\n5) E"
     assert question.stem == "New question?"
     assert question.choices == ["A", "B", "C", "D", "E"]
+    assert question.status == ReviewStatus.NEEDS_FIX
+    assert question.notes == "review decision only"
     assert question.manually_edited is False
+
+
+def test_update_candidate_marks_manual_only_when_ocr_text_changes(tmp_path: Path, suggestion_run: Path) -> None:
+    data_root = tmp_path / "data"
+    initialize_review_state("leet-2026-verbal-even", suggestion_run, data_root=data_root)
+
+    status_only = update_candidate(
+        "leet-2026-verbal-even",
+        "q01",
+        {"status": "needs_fix", "notes": "needs another look"},
+        data_root=data_root,
+    )
+    same_text = update_candidate(
+        "leet-2026-verbal-even",
+        "q01",
+        {"stem": status_only.stem},
+        data_root=data_root,
+    )
+    changed_text = update_candidate(
+        "leet-2026-verbal-even",
+        "q01",
+        {"stem": "Manual question"},
+        data_root=data_root,
+    )
+
+    assert status_only.manually_edited is False
+    assert same_text.manually_edited is False
+    assert changed_text.manually_edited is True

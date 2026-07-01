@@ -250,6 +250,50 @@ def test_question_prefill_recovers_omitted_choice_marker_inside_crop_bbox(tmp_pa
     assert question.choices == ["Choice one", "Choice two", "Choice three", "Choice four", "Choice five"]
 
 
+def test_question_prefill_uses_bbox_when_included_rows_are_empty(tmp_path: Path) -> None:
+    run_dir = tmp_path / "artifacts" / "question_crop_suggestions" / "run"
+    (run_dir / "q03_candidate").mkdir(parents=True)
+    (run_dir / "q03_candidate" / "q03_candidate_preview.png").write_bytes(b"preview")
+    rows = [
+        {"row_index": 0, "text": "outside", "local_bbox": [100, 10, 900, 40]},
+        {"row_index": 1, "text": "3. Bbox question?", "local_bbox": [100, 60, 900, 90]},
+        {"row_index": 2, "text": "1) One", "local_bbox": [100, 110, 900, 140]},
+        {"row_index": 3, "text": "2) Two", "local_bbox": [100, 160, 900, 190]},
+        {"row_index": 4, "text": "3) Three", "local_bbox": [100, 210, 900, 240]},
+        {"row_index": 5, "text": "4) Four", "local_bbox": [100, 260, 900, 290]},
+        {"row_index": 6, "text": "5) Five", "local_bbox": [100, 310, 900, 340]},
+    ]
+    (run_dir / "page_003_left.paddleocr.json").write_text(json.dumps({"rows": rows}), encoding="utf-8")
+    payload = {
+        "artifact_type": "candidate_question_crop_suggestions",
+        "suggestions": [
+            {
+                "suggestion_id": "q03",
+                "kind": "candidate_question_crop_suggestion",
+                "question_number": 3,
+                "candidate_preview_path": "q03_candidate/q03_candidate_preview.png",
+                "parts": [
+                    {
+                        "page": 3,
+                        "column": "left",
+                        "block_id": "p003_left",
+                        "local_crop_bbox": [80, 50, 920, 350],
+                        "included_row_ids": [],
+                    }
+                ],
+            }
+        ],
+    }
+    suggestions_path = run_dir / "suggestions.json"
+    suggestions_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    state = initialize_review_state("leet-2026-verbal-even", suggestions_path, data_root=tmp_path / "data")
+
+    question = state.candidates[0]
+    assert question.raw_ocr_text == "3. Bbox question?\n1) One\n2) Two\n3) Three\n4) Four\n5) Five"
+    assert question.stem == "Bbox question?"
+
+
 def test_passage_prefill_separates_standard_header_from_body() -> None:
     raw = "[1~3] 다음 글을 읽고 물음에 답하시오.\n문학이 사회를 반영한다.\n법의 영역에도 적용된다."
 
