@@ -71,10 +71,10 @@ def test_passage_prefill_uses_raw_ocr_body(tmp_path: Path) -> None:
 
     passage = state.candidates[0]
     assert passage.raw_ocr_text == "첫 줄\n둘째 줄"
-    assert passage.verified_text == "첫 줄\n둘째 줄"
+    assert passage.verified_text == "첫 줄 둘째 줄"
     assert passage.ocr_draft_text == "첫 줄\n둘째 줄"
     assert passage.prefill_source == "ocr_heuristic"
-    assert "joined_forced_line_breaks" not in passage.correction_steps
+    assert "joined_forced_line_breaks" in passage.correction_steps
 
 
 def test_passage_prefill_preserves_blank_ocr_rows_from_suggestions(tmp_path: Path) -> None:
@@ -88,7 +88,7 @@ def test_passage_prefill_preserves_blank_ocr_rows_from_suggestions(tmp_path: Pat
 
     passage = state.candidates[0]
     assert passage.raw_ocr_text == "Alpha line one\nAlpha line two\n\nBeta line one\nBeta line two"
-    assert passage.verified_text == "Alpha line one\nAlpha line two\n\nBeta line one\nBeta line two"
+    assert passage.verified_text == "Alpha line one Alpha line two\n\nBeta line one Beta line two"
 
 
 def test_passage_prefill_preserves_indented_paragraph_starts_from_ocr_rows(tmp_path: Path) -> None:
@@ -151,8 +151,8 @@ def test_passage_prefill_preserves_indented_paragraph_starts_from_ocr_rows(tmp_p
         "Second paragraph line one\nSecond paragraph line two"
     )
     assert passage.verified_text == (
-        "Header\n\nFirst paragraph line one\nFirst paragraph line two\n\n"
-        "Second paragraph line one\nSecond paragraph line two"
+        "Header\n\nFirst paragraph line one First paragraph line two\n\n"
+        "Second paragraph line one Second paragraph line two"
     )
 
 
@@ -196,7 +196,7 @@ def test_passage_prefill_excludes_included_edge_header_fragments(tmp_path: Path)
 
     passage = state.candidates[0]
     assert "\uadf8\ud638" not in passage.raw_ocr_text
-    assert passage.verified_text == "Passage starts here\nPassage continues"
+    assert passage.verified_text == "Passage starts here Passage continues"
 
 
 def test_question_prefill_recovers_omitted_choice_marker_inside_crop_bbox(tmp_path: Path) -> None:
@@ -255,7 +255,7 @@ def test_passage_prefill_separates_standard_header_from_body() -> None:
 
     draft = generate_ocr_draft(CandidateType.PASSAGE, raw)
 
-    assert draft.verified_text == "[1~3] 다음 글을 읽고 물음에 답하시오.\n\n문학이 사회를 반영한다.\n법의 영역에도 적용된다."
+    assert draft.verified_text == "[1~3] 다음 글을 읽고 물음에 답하시오.\n\n문학이 사회를 반영한다. 법의 영역에도 적용된다."
     assert "formatted_passage_header_break" in draft.correction_steps
 
 
@@ -264,7 +264,7 @@ def test_passage_prefill_separates_header_even_without_question_range() -> None:
 
     draft = generate_ocr_draft(CandidateType.PASSAGE, raw)
 
-    assert draft.verified_text == "다음 글을 읽고 물음에 답하시오.\n\n첫 문장\n둘째 문장"
+    assert draft.verified_text == "다음 글을 읽고 물음에 답하시오.\n\n첫 문장 둘째 문장"
     assert "formatted_passage_header_break" in draft.correction_steps
 
 
@@ -273,8 +273,25 @@ def test_passage_prefill_preserves_blank_line_paragraph_breaks() -> None:
 
     draft = generate_ocr_draft(CandidateType.PASSAGE, raw)
 
-    assert draft.verified_text == "Alpha line one\nAlpha line two\n\nBeta line one\nBeta line two"
-    assert "joined_forced_line_breaks" not in draft.correction_steps
+    assert draft.verified_text == "Alpha line one Alpha line two\n\nBeta line one Beta line two"
+    assert "joined_forced_line_breaks" in draft.correction_steps
+
+
+def test_passage_prefill_joins_prose_rows_within_paragraph() -> None:
+    raw = (
+        "제도의 선택에 대한 설명에는,합리적인 주체인 사회 구성원들\n"
+        "이 사회 전체적으로 가장 이익이 되는 제도를 채택한다고 보는\n"
+        "효율성 시각과 이데올로기·경로의존성·정치적 과정 등으로 인해\n"
+        "효율적 제도의 선택이 일반적이지 않다고 보는 시각이 있다."
+    )
+
+    draft = generate_ocr_draft(CandidateType.PASSAGE, raw)
+
+    assert draft.verified_text == (
+        "제도의 선택에 대한 설명에는, 합리적인 주체인 사회 구성원들이 사회 전체적으로 가장 이익이 되는 제도를 "
+        "채택한다고 보는 효율성 시각과 이데올로기·경로의존성·정치적 과정 등으로 인해 효율적 제도의 선택이 "
+        "일반적이지 않다고 보는 시각이 있다."
+    )
 
 
 def test_passage_prefill_joins_korean_words_split_by_line_wraps() -> None:
@@ -287,7 +304,7 @@ def test_passage_prefill_joins_korean_words_split_by_line_wraps() -> None:
 
     assert (
         draft.verified_text
-        == "진실을 다룰 능력\n존재한다는 주장\n그러나 전자는\n믿는 바\n법적으로 인정\n무효로\n할 근거\n보장하는\n해석론\n현대의\n민주국가"
+        == "진실을 다룰 능력 존재한다는 주장 그러나 전자는 믿는 바 법적으로 인정 무효로 할 근거 보장하는 해석론 현대의 민주국가"
     )
     assert "joined_forced_line_breaks" in draft.correction_steps
 
@@ -313,13 +330,9 @@ def test_passage_prefill_preserves_script_rows() -> None:
     assert draft.verified_text == (
         "(나)\n"
         "[부산에 도착한 첫날 밤 세 가족은 파티를 연다.]\n"
-        "창수댁: (한쪽이 터진 트렁크를 들고)여보, 이것 좀 보세요. 뚜껑을 덮으니까 또 터지겠죠.(돌아보지 않는 창수를 보고)\n"
-        "아니 여보, 당신은 남의 것을 보듯 거들떠보지도 않는구려.\n"
+        "창수댁: (한쪽이 터진 트렁크를 들고)여보, 이것 좀 보세요. 뚜껑을 덮으니까 또 터지겠죠.(돌아보지 않는 창수를 보고) 아니 여보, 당신은 남의 것을 보듯 거들떠보지도 않는구려.\n"
         "(창수, 외면하고 서 있다.)\n"
-        "창 수: 인젠 제에발 그 구질구질한 짐짝을 끌구 다니지 말자구\n"
-        "했잖소.[] 바다 깊이 때 묻은 과거를 수장해 버리란\n"
-        "말요. 새로운 옷을 입으려거든 낡은 것을 미련 없이 벗어\n"
-        "버려야하는 거야.\n"
+        "창 수: 인젠 제에발 그 구질구질한 짐짝을 끌구 다니지 말자구 했잖소.[] 바다 깊이 때 묻은 과거를 수장해 버리란 말요. 새로운 옷을 입으려거든 낡은 것을 미련 없이 벗어 버려야하는 거야.\n"
         "모 두: (술잔을 쳐들고) 브라보!\n"
         "-김자림, [이민선]-"
     )

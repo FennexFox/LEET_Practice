@@ -252,6 +252,12 @@ CHOICE_MARKER_RE = re.compile(
 )
 VIEW_HEADING_RE = re.compile(r"^<\s*\ubcf4\s*\uae30\s*>$")
 VIEW_ITEM_MARKER_RE = re.compile(r"^(?:[\u3131-\u314e]|7)\s*[.)]\s*")
+PASSAGE_SECTION_LABEL_RE = re.compile(r"^\([^\s()]{1,3}\)$")
+PASSAGE_BRACKETED_DIRECTION_RE = re.compile(r"^\[[^\]]+\]$")
+PASSAGE_SPEAKER_RE = re.compile(r"^[\uac00-\ud7a3A-Za-z][\uac00-\ud7a3A-Za-z\s]{0,8}:")
+PASSAGE_STANDALONE_DIRECTION_RE = re.compile(r"^\([^)]*\)$")
+PASSAGE_SOURCE_RE = re.compile(r"^[-\u2014].+[-\u2014]$")
+PASSAGE_FOOTNOTE_RE = re.compile(r"^\*")
 PASSAGE_HEADER_RE = re.compile(
     r"(?P<header>(?:\[\s*\d+\s*[~～-]\s*\d+\s*\]\s*)?다음\s+글을\s+읽고\s+물음에\s+답하시오\.)\s*"
 )
@@ -390,21 +396,35 @@ def _join_wrapped_lines(lines: list[str]) -> str:
 def _join_wrapped_text(text: str) -> str:
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
     paragraphs = re.split(r"\n\s*\n+", normalized)
-    joined = [_join_obvious_line_wraps(paragraph.split("\n")) for paragraph in paragraphs]
+    joined = [_join_passage_paragraph(paragraph.split("\n")) for paragraph in paragraphs]
     return "\n\n".join(paragraph for paragraph in joined if paragraph)
 
 
-def _join_obvious_line_wraps(lines: list[str]) -> str:
-    joined: list[str] = []
+def _is_passage_block_start(line: str) -> bool:
+    return bool(
+        PASSAGE_SECTION_LABEL_RE.fullmatch(line)
+        or PASSAGE_BRACKETED_DIRECTION_RE.fullmatch(line)
+        or PASSAGE_SPEAKER_RE.match(line)
+        or PASSAGE_STANDALONE_DIRECTION_RE.fullmatch(line)
+        or PASSAGE_SOURCE_RE.match(line)
+        or PASSAGE_FOOTNOTE_RE.match(line)
+    )
+
+
+def _join_passage_paragraph(lines: list[str]) -> str:
+    blocks: list[list[str]] = []
+    current: list[str] = []
     for line in lines:
         stripped = line.strip()
         if not stripped:
             continue
-        if joined and _is_korean_continuation(joined[-1], stripped):
-            joined[-1] = _join_wrapped_pair(joined[-1], stripped)
-        else:
-            joined.append(stripped)
-    return "\n".join(joined)
+        if current and _is_passage_block_start(stripped):
+            blocks.append(current)
+            current = []
+        current.append(stripped)
+    if current:
+        blocks.append(current)
+    return "\n".join(_join_wrapped_lines(block) for block in blocks if block)
 
 
 def _format_passage_header_break(text: str) -> str:
