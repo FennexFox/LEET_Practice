@@ -226,6 +226,12 @@ def parse_args() -> argparse.Namespace:
         help="CPU thread count passed to PaddleOCR when the installed version supports it.",
     )
     parser.add_argument(
+        "--paddle-text-recognition-batch-size",
+        type=int,
+        default=None,
+        help="Text recognition batch size passed to PaddleOCR when the installed version supports it.",
+    )
+    parser.add_argument(
         "--paddle-disable-mkldnn",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -270,20 +276,20 @@ def make_run_dir(base_dir: Path, run_id: str | None) -> Path:
 def parse_pages(value: str) -> list[int]:
     pages: set[int] = set()
     for part in value.split(","):
-        token = part.strip()
-        if not token:
+        page_part = part.strip()
+        if not page_part:
             continue
-        if "-" in token:
-            start_text, end_text = token.split("-", 1)
+        if "-" in page_part:
+            start_text, end_text = page_part.split("-", 1)
             start = int(start_text.strip())
             end = int(end_text.strip())
             if start <= 0 or end <= 0 or end < start:
-                raise ValueError(f"Invalid page range: {token}")
+                raise ValueError(f"Invalid page range: {page_part}")
             pages.update(range(start, end + 1))
         else:
-            page = int(token)
+            page = int(page_part)
             if page <= 0:
-                raise ValueError(f"Invalid page number: {token}")
+                raise ValueError(f"Invalid page number: {page_part}")
             pages.add(page)
     if not pages:
         raise ValueError("--pages did not contain any page numbers.")
@@ -492,6 +498,7 @@ def run_ocr_for_block(block: dict[str, Any], args: argparse.Namespace, run_dir: 
                 "paddle_device": args.paddle_device,
                 "paddle_cpu_threads": args.paddle_cpu_threads,
                 "paddle_disable_mkldnn": args.paddle_disable_mkldnn,
+                "paddle_text_recognition_batch_size": args.paddle_text_recognition_batch_size,
                 "paddle_disable_pir": args.paddle_disable_pir,
                 "paddle_disable_doc_preprocess": args.paddle_disable_doc_preprocess,
                 "include_raw_paddle_payload": args.include_raw_paddle_payload,
@@ -1352,6 +1359,7 @@ def build_stream(args: argparse.Namespace, run_dir: Path) -> dict[str, Any]:
             "paddle_device": args.paddle_device,
             "paddle_cpu_threads": args.paddle_cpu_threads,
             "paddle_disable_mkldnn": args.paddle_disable_mkldnn,
+            "paddle_text_recognition_batch_size": args.paddle_text_recognition_batch_size,
             "paddle_disable_pir": args.paddle_disable_pir,
             "paddle_disable_doc_preprocess": args.paddle_disable_doc_preprocess,
             "paddle_preimport_torch": args.paddle_preimport_torch,

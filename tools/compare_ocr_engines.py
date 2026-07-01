@@ -104,6 +104,12 @@ def parse_args() -> argparse.Namespace:
         help="CPU thread count passed to PaddleOCR when the installed version supports it.",
     )
     parser.add_argument(
+        "--paddle-text-recognition-batch-size",
+        type=int,
+        default=None,
+        help="Text recognition batch size passed to PaddleOCR when the installed version supports it.",
+    )
+    parser.add_argument(
         "--paddle-disable-mkldnn",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -308,6 +314,14 @@ def build_paddleocr(args: argparse.Namespace) -> Any:
         kwargs["device"] = args.paddle_device
     if "cpu_threads" in constructor_params:
         kwargs["cpu_threads"] = args.paddle_cpu_threads
+    text_recognition_batch_size = getattr(args, "paddle_text_recognition_batch_size", None)
+    if text_recognition_batch_size is not None:
+        if text_recognition_batch_size <= 0:
+            raise ValueError("--paddle-text-recognition-batch-size must be positive.")
+        if "text_recognition_batch_size" in constructor_params:
+            kwargs["text_recognition_batch_size"] = text_recognition_batch_size
+        elif "rec_batch_num" in constructor_params:
+            kwargs["rec_batch_num"] = text_recognition_batch_size
     if args.paddle_disable_mkldnn and "enable_mkldnn" in constructor_params:
         kwargs["enable_mkldnn"] = False
     if args.paddle_disable_doc_preprocess:
@@ -328,6 +342,7 @@ def get_paddleocr(args: argparse.Namespace) -> Any:
         str(args.paddle_lang),
         args.paddle_device,
         args.paddle_cpu_threads,
+        getattr(args, "paddle_text_recognition_batch_size", None),
         args.paddle_disable_mkldnn,
         args.paddle_disable_pir,
         args.paddle_disable_doc_preprocess,
@@ -513,6 +528,7 @@ def write_manifest(run_dir: Path, args: argparse.Namespace, image_tasks: list[Im
             "paddle_lang": args.paddle_lang,
             "paddle_device": args.paddle_device,
             "paddle_cpu_threads": args.paddle_cpu_threads,
+            "paddle_text_recognition_batch_size": args.paddle_text_recognition_batch_size,
             "paddle_disable_mkldnn": args.paddle_disable_mkldnn,
             "paddle_disable_pir": args.paddle_disable_pir,
             "paddle_disable_doc_preprocess": args.paddle_disable_doc_preprocess,
