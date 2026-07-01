@@ -77,6 +77,24 @@ def test_passage_prefill_uses_raw_ocr_body(tmp_path: Path) -> None:
     assert "joined_forced_line_breaks" in passage.correction_steps
 
 
+def test_passage_prefill_separates_standard_header_from_body() -> None:
+    raw = "[1~3] 다음 글을 읽고 물음에 답하시오.\n문학이 사회를 반영한다.\n법의 영역에도 적용된다."
+
+    draft = generate_ocr_draft(CandidateType.PASSAGE, raw)
+
+    assert draft.verified_text == "[1~3] 다음 글을 읽고 물음에 답하시오.\n\n문학이 사회를 반영한다. 법의 영역에도 적용된다."
+    assert "formatted_passage_header_break" in draft.correction_steps
+
+
+def test_passage_prefill_separates_header_even_without_question_range() -> None:
+    raw = "다음 글을 읽고 물음에 답하시오.\n첫 문장\n둘째 문장"
+
+    draft = generate_ocr_draft(CandidateType.PASSAGE, raw)
+
+    assert draft.verified_text == "다음 글을 읽고 물음에 답하시오.\n\n첫 문장 둘째 문장"
+    assert "formatted_passage_header_break" in draft.correction_steps
+
+
 def test_question_prefill_splits_circled_choice_markers() -> None:
     raw = "\ubb38 1. 다음 중 옳은 것은?\n\u2460 갑\n\u2461 을\n\u2462 병\n\u2463 정\n\u2464 무"
 
