@@ -63,6 +63,11 @@ def review_crops(
     no_open: bool = typer.Option(False, "--no-open", help="Do not open the browser automatically."),
     init_only: bool = typer.Option(False, "--init-only", help="Initialize review state without starting the server."),
     overwrite: bool = typer.Option(False, "--overwrite", help="Rebuild review state from suggestions.json."),
+    refresh_preserving_edits: bool = typer.Option(
+        False,
+        "--refresh-preserving-edits",
+        help="Rebuild OCR-derived fields while preserving manually edited review fields for matching candidates.",
+    ),
     enable_spacing_cleanup: bool = typer.Option(
         False,
         "--enable-spacing-cleanup",
@@ -87,6 +92,7 @@ def review_crops(
             suggestions,
             data_root=data_root,
             overwrite=overwrite,
+            refresh_preserving_edits=refresh_preserving_edits,
             enable_spacing_cleanup=enable_spacing_cleanup,
             enable_morphology_checks=enable_morphology_checks,
         )

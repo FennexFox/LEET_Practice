@@ -67,6 +67,7 @@ class ReviewCandidate(BaseModel):
     prefill_source: str | None = None
     prefill_warnings: list[str] = Field(default_factory=list)
     correction_steps: list[str] = Field(default_factory=list)
+    manually_edited: bool = False
     provenance: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("choices")
@@ -641,25 +642,66 @@ def save_review_state(state: ReviewState, *, data_root: Path = Path("data")) -> 
     return path
 
 
+def _has_review_edits(candidate: ReviewCandidate) -> bool:
+    return bool(
+        candidate.manually_edited
+        or candidate.status != ReviewStatus.UNREVIEWED
+        or candidate.notes.strip()
+        or candidate.correct_answer is not None
+    )
+
+
+def _preserve_review_edits(fresh: ReviewState, existing: ReviewState) -> ReviewState:
+    existing_by_id = {candidate.candidate_id: candidate for candidate in existing.candidates}
+    merged_candidates: list[ReviewCandidate] = []
+    for fresh_candidate in fresh.candidates:
+        existing_candidate = existing_by_id.get(fresh_candidate.candidate_id)
+        if existing_candidate is None or not _has_review_edits(existing_candidate):
+            merged_candidates.append(fresh_candidate)
+            continue
+        patch = fresh_candidate.model_dump()
+        for key in (
+            "status",
+            "question_number",
+            "start_question",
+            "end_question",
+            "verified_text",
+            "stem",
+            "choices",
+            "correct_answer",
+            "passage_id",
+            "notes",
+            "manually_edited",
+        ):
+            patch[key] = getattr(existing_candidate, key)
+        merged_candidates.append(ReviewCandidate.model_validate(patch))
+    fresh.candidates = merged_candidates
+    return fresh
+
+
 def initialize_review_state(
     exam_id: str,
     suggestions_path: Path,
     *,
     data_root: Path = Path("data"),
     overwrite: bool = False,
+    refresh_preserving_edits: bool = False,
     enable_spacing_cleanup: bool = False,
     enable_morphology_checks: bool = False,
 ) -> ReviewState:
     """Create or load review state for a suggestions file."""
 
     path = review_state_path(exam_id, data_root=data_root)
-    if path.exists() and not overwrite:
+    if path.exists() and not overwrite and not refresh_preserving_edits:
         return load_review_state(exam_id, data_root=data_root)
+    existing = load_review_state(exam_id, data_root=data_root) if path.exists() and refresh_preserving_edits else None
     draft_options = DraftOptions(
         enable_spacing_cleanup=enable_spacing_cleanup,
         enable_morphology_checks=enable_morphology_checks,
     )
     state = parse_suggestions(exam_id, suggestions_path, draft_options=draft_options)
+    if existing is not None:
+        state = _preserve_review_edits(state, existing)
     save_review_state(state, data_root=data_root)
     write_verified_drafts(state, data_root=data_root)
     return state
@@ -722,6 +764,8 @@ def update_candidate(
         for key, value in updates.items():
             if key in allowed:
                 patch[key] = value
+        if any(key in allowed for key in updates):
+            patch["manually_edited"] = True
         updated = ReviewCandidate.model_validate(patch)
         index = state.candidates.index(candidate)
         state.candidates[index] = updated
@@ -753,6 +797,7 @@ def reapply_ocr_draft(
         candidate = _candidate_by_id(state, candidate_id)
         options = DraftOptions.model_validate(state.draft_options)
         updated = apply_ocr_draft(candidate, options)
+        updated = updated.model_copy(update={"manually_edited": False})
         index = state.candidates.index(candidate)
         state.candidates[index] = updated
         drafts = build_verified_drafts(state)
