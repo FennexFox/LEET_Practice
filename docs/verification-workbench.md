@@ -38,13 +38,20 @@ through local helpers during initialization:
 ```powershell
 leet-practice verify leet-2026-verbal-even `
   --enable-spacing-cleanup `
-  --enable-morphology-checks
+  --enable-morphology-checks `
+  --local-nlp-workers 4
 ```
 
 Spacing cleanup tries local `pykospacing` first, then `korspacing`, and then
 `kiwipiepy` when those packages are installed. Morphology checks also use
 `kiwipiepy` when installed. Missing optional packages are recorded as draft
 warnings instead of blocking review.
+
+The local cleanup backends are initialized once while building or refreshing a
+review state and then reused for all candidates in that run. `--local-nlp-workers`
+applies only to optional Kiwi morphology checks; it does not change spacing
+cleanup behavior. When Kiwi batch analysis is unavailable, morphology checks
+fall back to the existing per-candidate path.
 
 The command starts a local server and opens a browser-based review UI by
 default.

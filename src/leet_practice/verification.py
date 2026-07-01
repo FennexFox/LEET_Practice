@@ -9,6 +9,8 @@ import re
 import shutil
 import threading
 import webbrowser
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from http import HTTPStatus
@@ -86,7 +88,7 @@ class ReviewState(BaseModel):
     suggestions_path: str
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
-    draft_options: dict[str, bool] = Field(default_factory=dict)
+    draft_options: dict[str, Any] = Field(default_factory=dict)
     candidates: list[ReviewCandidate] = Field(default_factory=list)
 
 
@@ -95,6 +97,7 @@ class DraftOptions(BaseModel):
 
     enable_spacing_cleanup: bool = False
     enable_morphology_checks: bool = False
+    local_nlp_workers: int = Field(default_factory=lambda: min(os.cpu_count() or 1, 4), ge=1)
 
 
 class OcrDraft(BaseModel):
@@ -114,6 +117,23 @@ class OcrDraft(BaseModel):
         if len(normalized) < 5:
             normalized.extend([""] * (5 - len(normalized)))
         return normalized[:5]
+
+
+@dataclass(frozen=True)
+class SpacingBackend:
+    name: str
+    apply: Callable[[str], str]
+
+
+@dataclass
+class CleanupBackends:
+    """Cached optional local NLP backends for one review-state initialization."""
+
+    spacing_backend: SpacingBackend | None = None
+    spacing_setup_warning: str | None = None
+    kiwi: Any | None = None
+    kiwi_setup_warning: str | None = None
+    local_nlp_workers: int = 1
 
 
 class VerifiedPassageDraft(BaseModel):
@@ -484,9 +504,103 @@ def _is_circled_choice_marker(marker: str) -> bool:
     return "\u2460" <= marker <= "\u2464"
 
 
-def _apply_spacing_cleanup(text: str) -> tuple[str, list[str], list[str]]:
+def _build_kiwi(workers: int) -> tuple[Any | None, str | None]:
+    try:
+        module = import_module("kiwipiepy")
+    except ImportError:
+        return None, "kiwi_backend_unavailable"
+    if not hasattr(module, "Kiwi"):
+        return None, "kiwi_backend_unavailable:no_kiwi_class"
+    try:
+        return module.Kiwi(num_workers=workers), None
+    except TypeError:
+        try:
+            return module.Kiwi(), None
+        except Exception as exc:  # noqa: BLE001 - optional backend should not break review.
+            return None, f"kiwi_backend_failed:{exc}"
+    except Exception as exc:  # noqa: BLE001 - optional backend should not break review.
+        return None, f"kiwi_backend_failed:{exc}"
+
+
+def build_cleanup_backends(options: DraftOptions | None = None) -> CleanupBackends:
+    """Resolve optional local NLP backends once for a batch of OCR drafts."""
+
+    options = options or DraftOptions()
+    backends = CleanupBackends(local_nlp_workers=options.local_nlp_workers)
+
+    if options.enable_spacing_cleanup:
+        try:
+            module = import_module("pykospacing")
+        except ImportError:
+            module = None
+        if module is not None and hasattr(module, "Spacing"):
+            try:
+                spacing = module.Spacing()
+            except Exception as exc:  # noqa: BLE001 - optional backend should not break review.
+                backends.spacing_setup_warning = f"spacing_backend_failed:pykospacing:{exc}"
+                return backends
+            backends.spacing_backend = SpacingBackend("pykospacing", spacing)
+            if options.enable_morphology_checks:
+                backends.kiwi, backends.kiwi_setup_warning = _build_kiwi(options.local_nlp_workers)
+            return backends
+
+        try:
+            module = import_module("korspacing")
+        except ImportError:
+            module = None
+        if module is not None:
+            try:
+                if hasattr(module, "Spacing"):
+                    spacing = module.Spacing()
+                    backends.spacing_backend = SpacingBackend("korspacing", spacing)
+                elif hasattr(module, "space"):
+                    backends.spacing_backend = SpacingBackend("korspacing", module.space)
+                else:
+                    backends.spacing_setup_warning = "spacing_backend_unavailable:no_supported_api"
+                if options.enable_morphology_checks:
+                    backends.kiwi, backends.kiwi_setup_warning = _build_kiwi(options.local_nlp_workers)
+                return backends
+            except Exception as exc:  # noqa: BLE001 - optional backend should not break review.
+                backends.spacing_setup_warning = f"spacing_backend_failed:korspacing:{exc}"
+                return backends
+
+        kiwi, kiwi_warning = _build_kiwi(options.local_nlp_workers)
+        backends.kiwi = kiwi
+        backends.kiwi_setup_warning = kiwi_warning
+        if kiwi is None:
+            if kiwi_warning == "kiwi_backend_unavailable:no_kiwi_class":
+                backends.spacing_setup_warning = "spacing_backend_unavailable:kiwipiepy:no_kiwi_class"
+            elif kiwi_warning and kiwi_warning.startswith("kiwi_backend_failed:"):
+                backends.spacing_setup_warning = kiwi_warning.replace(
+                    "kiwi_backend_failed:",
+                    "spacing_backend_failed:kiwipiepy:",
+                    1,
+                )
+            else:
+                backends.spacing_setup_warning = "spacing_backend_unavailable"
+        else:
+            backends.spacing_backend = SpacingBackend("kiwipiepy", kiwi.space)
+
+    if options.enable_morphology_checks and backends.kiwi is None:
+        backends.kiwi, backends.kiwi_setup_warning = _build_kiwi(options.local_nlp_workers)
+
+    return backends
+
+
+def _apply_spacing_cleanup(text: str, backends: CleanupBackends | None = None) -> tuple[str, list[str], list[str]]:
     warnings: list[str] = []
     steps: list[str] = []
+    if backends is not None:
+        if backends.spacing_setup_warning:
+            return text, [backends.spacing_setup_warning], []
+        if backends.spacing_backend is None:
+            return text, ["spacing_backend_unavailable"], steps
+        try:
+            corrected = backends.spacing_backend.apply(text)
+        except Exception as exc:  # noqa: BLE001 - optional backend should not break review.
+            return text, [f"spacing_backend_failed:{backends.spacing_backend.name}:{exc}"], []
+        return str(corrected), warnings, [f"spacing_cleanup:{backends.spacing_backend.name}"]
+
     try:
         module = import_module("pykospacing")
     except ImportError:
@@ -530,7 +644,16 @@ def _apply_spacing_cleanup(text: str) -> tuple[str, list[str], list[str]]:
     return text, ["spacing_backend_unavailable"], steps
 
 
-def _kiwi_morphology_warnings(text: str) -> tuple[list[str], list[str]]:
+def _kiwi_morphology_warnings(text: str, backends: CleanupBackends | None = None) -> tuple[list[str], list[str]]:
+    if backends is not None:
+        if backends.kiwi is None:
+            return [backends.kiwi_setup_warning or "kiwi_backend_unavailable"], []
+        try:
+            tokens = backends.kiwi.tokenize(text)
+        except Exception as exc:  # noqa: BLE001 - optional backend should not break review.
+            return [f"kiwi_backend_failed:{exc}"], []
+        return _morphology_warnings_from_tokens(text, tokens)
+
     try:
         module = import_module("kiwipiepy")
     except ImportError:
@@ -542,6 +665,10 @@ def _kiwi_morphology_warnings(text: str) -> tuple[list[str], list[str]]:
     except Exception as exc:  # noqa: BLE001 - optional backend should not break review.
         return [f"kiwi_backend_failed:{exc}"], []
 
+    return _morphology_warnings_from_tokens(text, tokens)
+
+
+def _morphology_warnings_from_tokens(text: str, tokens: Any) -> tuple[list[str], list[str]]:
     warnings: list[str] = []
     hangul_chars = len(re.findall(r"[\uac00-\ud7a3]", text))
     token_count = len(tokens or [])
@@ -554,12 +681,34 @@ def _kiwi_morphology_warnings(text: str) -> tuple[list[str], list[str]]:
     return warnings, ["kiwi_morphology_checked"]
 
 
+def _kiwi_morphology_warnings_batch(
+    texts: list[str],
+    backends: CleanupBackends,
+) -> list[tuple[list[str], list[str]]]:
+    if backends.kiwi is None:
+        return [([backends.kiwi_setup_warning or "kiwi_backend_unavailable"], []) for _ in texts]
+    try:
+        analyze = getattr(backends.kiwi, "analyze")
+        analyzed = list(analyze(texts))
+        if len(analyzed) != len(texts):
+            raise ValueError("Kiwi batch analysis returned an unexpected result count")
+        results: list[tuple[list[str], list[str]]] = []
+        for text, item in zip(texts, analyzed, strict=True):
+            tokens = item[0] if isinstance(item, tuple) and item else item
+            results.append(_morphology_warnings_from_tokens(text, tokens))
+        return results
+    except Exception:
+        return [_kiwi_morphology_warnings(text, backends) for text in texts]
+
+
 def generate_ocr_draft(
     candidate_type: CandidateType,
     raw_ocr_text: str,
     *,
     question_number: int | None = None,
     options: DraftOptions | None = None,
+    cleanup_backends: CleanupBackends | None = None,
+    morphology_result: tuple[list[str], list[str]] | None = None,
 ) -> OcrDraft:
     """Generate a review draft from raw OCR text without changing the raw text."""
 
@@ -569,12 +718,12 @@ def generate_ocr_draft(
     steps: list[str] = ["ocr_heuristic_prefill"]
 
     if options.enable_spacing_cleanup and text:
-        text, spacing_warnings, spacing_steps = _apply_spacing_cleanup(text)
+        text, spacing_warnings, spacing_steps = _apply_spacing_cleanup(text, cleanup_backends)
         warnings.extend(spacing_warnings)
         steps.extend(spacing_steps)
 
     if options.enable_morphology_checks and text:
-        kiwi_warnings, kiwi_steps = _kiwi_morphology_warnings(text)
+        kiwi_warnings, kiwi_steps = morphology_result or _kiwi_morphology_warnings(text, cleanup_backends)
         warnings.extend(kiwi_warnings)
         steps.extend(kiwi_steps)
 
@@ -665,12 +814,20 @@ def generate_ocr_draft(
     )
 
 
-def apply_ocr_draft(candidate: ReviewCandidate, options: DraftOptions | None = None) -> ReviewCandidate:
+def apply_ocr_draft(
+    candidate: ReviewCandidate,
+    options: DraftOptions | None = None,
+    *,
+    cleanup_backends: CleanupBackends | None = None,
+    morphology_result: tuple[list[str], list[str]] | None = None,
+) -> ReviewCandidate:
     draft = generate_ocr_draft(
         candidate.candidate_type,
         candidate.raw_ocr_text,
         question_number=candidate.question_number,
         options=options,
+        cleanup_backends=cleanup_backends,
+        morphology_result=morphology_result,
     )
     patch = candidate.model_dump()
     patch["ocr_draft_text"] = draft.draft_text
@@ -683,6 +840,47 @@ def apply_ocr_draft(candidate: ReviewCandidate, options: DraftOptions | None = N
         patch["stem"] = draft.stem
         patch["choices"] = draft.choices
     return ReviewCandidate.model_validate(patch)
+
+
+def _texts_after_spacing_cleanup(
+    candidates: list[ReviewCandidate],
+    options: DraftOptions,
+    cleanup_backends: CleanupBackends | None,
+) -> list[str]:
+    texts: list[str] = []
+    for candidate in candidates:
+        text = candidate.raw_ocr_text.strip()
+        if options.enable_spacing_cleanup and text:
+            text, _, _ = _apply_spacing_cleanup(text, cleanup_backends)
+        texts.append(text)
+    return texts
+
+
+def apply_ocr_drafts(
+    candidates: list[ReviewCandidate],
+    options: DraftOptions | None = None,
+    *,
+    cleanup_backends: CleanupBackends | None = None,
+) -> list[ReviewCandidate]:
+    options = options or DraftOptions()
+    cleanup_backends = cleanup_backends or build_cleanup_backends(options)
+    morphology_results: list[tuple[list[str], list[str]] | None] = [None] * len(candidates)
+    if options.enable_morphology_checks and not options.enable_spacing_cleanup:
+        morphology_texts = _texts_after_spacing_cleanup(candidates, options, cleanup_backends)
+        non_empty_indexes = [index for index, text in enumerate(morphology_texts) if text]
+        non_empty_texts = [morphology_texts[index] for index in non_empty_indexes]
+        batch_results = _kiwi_morphology_warnings_batch(non_empty_texts, cleanup_backends) if non_empty_texts else []
+        for index, result in zip(non_empty_indexes, batch_results, strict=True):
+            morphology_results[index] = result
+    return [
+        apply_ocr_draft(
+            candidate,
+            options,
+            cleanup_backends=cleanup_backends,
+            morphology_result=morphology_results[index],
+        )
+        for index, candidate in enumerate(candidates)
+    ]
 
 
 def _row_indices(row_ids: list[Any]) -> set[int]:
@@ -853,12 +1051,16 @@ def parse_suggestions(
                 "original": item,
             },
         )
-        candidates.append(apply_ocr_draft(candidate, draft_options))
+        candidates.append(candidate)
     return ReviewState(
         exam_id=exam_id,
         suggestions_path=str(suggestions_path),
         draft_options=draft_options.model_dump(),
-        candidates=candidates,
+        candidates=apply_ocr_drafts(
+            candidates,
+            draft_options,
+            cleanup_backends=build_cleanup_backends(draft_options),
+        ),
     )
 
 
@@ -918,6 +1120,7 @@ def initialize_review_state(
     refresh_preserving_edits: bool = False,
     enable_spacing_cleanup: bool = False,
     enable_morphology_checks: bool = False,
+    local_nlp_workers: int | None = None,
 ) -> ReviewState:
     """Create or load review state for a suggestions file."""
 
@@ -928,6 +1131,7 @@ def initialize_review_state(
     draft_options = DraftOptions(
         enable_spacing_cleanup=enable_spacing_cleanup,
         enable_morphology_checks=enable_morphology_checks,
+        local_nlp_workers=local_nlp_workers or min(os.cpu_count() or 1, 4),
     )
     state = parse_suggestions(exam_id, suggestions_path, draft_options=draft_options)
     if existing is not None:
@@ -1029,7 +1233,7 @@ def reapply_ocr_draft(
         state = load_review_state(exam_id, data_root=data_root)
         candidate = _candidate_by_id(state, candidate_id)
         options = DraftOptions.model_validate(state.draft_options)
-        updated = apply_ocr_draft(candidate, options)
+        updated = apply_ocr_draft(candidate, options, cleanup_backends=build_cleanup_backends(options))
         updated = updated.model_copy(update={"manually_edited": False})
         index = state.candidates.index(candidate)
         state.candidates[index] = updated
