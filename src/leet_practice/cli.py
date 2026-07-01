@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ipaddress import ip_address
 from pathlib import Path
 
 import typer
@@ -18,6 +19,15 @@ from leet_practice.verification import (
 
 app = typer.Typer(help="Local-first LEET practice and wrong-answer review tools.")
 console = Console()
+
+
+def _is_loopback_host(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 @app.callback()
@@ -53,6 +63,11 @@ def review_crops(
     no_open: bool = typer.Option(False, "--no-open", help="Do not open the browser automatically."),
     init_only: bool = typer.Option(False, "--init-only", help="Initialize review state without starting the server."),
     overwrite: bool = typer.Option(False, "--overwrite", help="Rebuild review state from suggestions.json."),
+    unsafe_allow_remote: bool = typer.Option(
+        False,
+        "--unsafe-allow-remote",
+        help="Allow binding the unauthenticated workbench to a non-loopback host.",
+    ),
 ) -> None:
     """Review OCR crop suggestions in a local browser workbench."""
 
@@ -73,6 +88,13 @@ def review_crops(
     if init_only:
         return
 
+    if not _is_loopback_host(host) and not unsafe_allow_remote:
+        console.print(
+            "[red]Refusing to bind the unauthenticated workbench to a non-loopback host.[/red]\n"
+            "Use --unsafe-allow-remote only on a trusted network."
+        )
+        raise typer.Exit(1)
+
     url = f"http://{host}:{port}/"
     console.print(f"Starting local verification workbench: {url}")
     console.print("Press Ctrl+C to stop.")
@@ -86,6 +108,9 @@ def review_crops(
         )
     except KeyboardInterrupt:
         console.print("\nStopped verification workbench.")
+    except OSError as exc:
+        console.print(f"[red]Failed to start workbench:[/red] {exc}")
+        raise typer.Exit(1) from exc
 
 
 @app.command()

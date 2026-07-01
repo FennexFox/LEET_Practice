@@ -40,7 +40,7 @@ The repository tracks code, schemas, documentation, and empty directory placehol
 See [`docs/data-layout.md`](docs/data-layout.md) for the intended local directory structure.
 See [`docs/verification-workbench.md`](docs/verification-workbench.md) for the
 planned human verification interface that promotes OCR crop suggestions into
-verified question data.
+verified passage and question data.
 
 ## Initial directory map
 

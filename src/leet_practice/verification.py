@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 import re
+import shutil
+import threading
 import webbrowser
 from datetime import datetime
 from enum import StrEnum
@@ -17,6 +20,8 @@ from urllib.parse import unquote, urlparse
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from leet_practice.models import Choice, TextStatus
+
+_review_state_lock = threading.RLock()
 
 
 class VerificationError(RuntimeError):
@@ -158,25 +163,39 @@ def _write_jsonl(path: Path, rows: list[BaseModel]) -> None:
     path.write_text((text + "\n") if text else "", encoding="utf-8")
 
 
+def _write_jsonl_atomic(path: Path, rows: list[BaseModel]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.tmp")
+    backup_path = path.with_name(f"{path.name}.bak")
+    text = "\n".join(row.model_dump_json() for row in rows)
+    temp_path.write_text((text + "\n") if text else "", encoding="utf-8")
+    if path.exists():
+        shutil.copy2(path, backup_path)
+    os.replace(temp_path, path)
+
+
 def _slug(value: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip())
     return slug.strip("_") or "candidate"
 
 
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
 def _resolve_artifact_path(raw_path: str | None, suggestions_dir: Path) -> str | None:
     if not raw_path:
         return None
+    suggestions_root = suggestions_dir.resolve()
     path = Path(raw_path)
-    if path.is_absolute():
-        return str(path.resolve())
-    if path.exists():
-        return str(path.resolve())
-    candidate = suggestions_dir / path
-    if candidate.exists():
-        path = candidate
-    else:
-        path = suggestions_dir / path
-    return str(path.resolve())
+    resolved = path.resolve() if path.is_absolute() else (suggestions_root / path).resolve()
+    if not _is_relative_to(resolved, suggestions_root):
+        raise VerificationError(f"Artifact path escapes suggestions directory: {raw_path}")
+    return str(resolved)
 
 
 def _candidate_type(kind: str) -> CandidateType | None:
@@ -247,6 +266,7 @@ def parse_suggestions(exam_id: str, suggestions_path: Path) -> ReviewState:
     payload = _read_json(suggestions_path)
     suggestions_dir = suggestions_path.parent
     candidates: list[ReviewCandidate] = []
+    candidate_ids: set[str] = set()
     for index, item in enumerate(payload.get("suggestions") or [], start=1):
         if not isinstance(item, dict):
             continue
@@ -259,9 +279,13 @@ def parse_suggestions(exam_id: str, suggestions_path: Path) -> ReviewState:
         passage_id = None
         if normalized_type == CandidateType.QUESTION and start_question and end_question:
             passage_id = passage_id_for(exam_id, int(start_question), int(end_question))
+        candidate_id = _slug(suggestion_id)
+        if candidate_id in candidate_ids:
+            raise VerificationError(f"Duplicate candidate_id after slug normalization: {candidate_id}")
+        candidate_ids.add(candidate_id)
         candidates.append(
             ReviewCandidate(
-                candidate_id=_slug(suggestion_id),
+                candidate_id=candidate_id,
                 suggestion_id=suggestion_id,
                 candidate_type=normalized_type,
                 question_number=item.get("question_number"),
@@ -322,6 +346,25 @@ def _candidate_by_id(state: ReviewState, candidate_id: str) -> ReviewCandidate:
     raise VerificationError(f"Unknown candidate: {candidate_id}")
 
 
+def _resync_question_passage_links(
+    state: ReviewState,
+    old_passage_id: str | None,
+    new_passage_id: str | None,
+    start_question: int | None,
+    end_question: int | None,
+) -> None:
+    if not old_passage_id or not new_passage_id or old_passage_id == new_passage_id:
+        return
+    for index, candidate in enumerate(state.candidates):
+        if candidate.candidate_type != CandidateType.QUESTION or candidate.passage_id != old_passage_id:
+            continue
+        patch = candidate.model_dump()
+        patch["passage_id"] = new_passage_id
+        patch["start_question"] = start_question
+        patch["end_question"] = end_question
+        state.candidates[index] = ReviewCandidate.model_validate(patch)
+
+
 def update_candidate(
     exam_id: str,
     candidate_id: str,
@@ -331,31 +374,44 @@ def update_candidate(
 ) -> ReviewCandidate:
     """Apply UI updates to one candidate and rewrite staged drafts."""
 
-    state = load_review_state(exam_id, data_root=data_root)
-    candidate = _candidate_by_id(state, candidate_id)
-    allowed = {
-        "status",
-        "verified_text",
-        "stem",
-        "choices",
-        "correct_answer",
-        "passage_id",
-        "notes",
-        "question_number",
-        "start_question",
-        "end_question",
-    }
-    patch = candidate.model_dump()
-    for key, value in updates.items():
-        if key in allowed:
-            patch[key] = value
-    updated = ReviewCandidate.model_validate(patch)
-    index = state.candidates.index(candidate)
-    state.candidates[index] = updated
-    build_verified_drafts(state)
-    save_review_state(state, data_root=data_root)
-    write_verified_drafts(state, data_root=data_root)
-    return updated
+    with _review_state_lock:
+        state = load_review_state(exam_id, data_root=data_root)
+        candidate = _candidate_by_id(state, candidate_id)
+        old_passage_id = None
+        if candidate.candidate_type == CandidateType.PASSAGE and candidate.start_question and candidate.end_question:
+            old_passage_id = passage_id_for(exam_id, candidate.start_question, candidate.end_question)
+        allowed = {
+            "status",
+            "verified_text",
+            "stem",
+            "choices",
+            "correct_answer",
+            "passage_id",
+            "notes",
+            "question_number",
+            "start_question",
+            "end_question",
+        }
+        patch = candidate.model_dump()
+        for key, value in updates.items():
+            if key in allowed:
+                patch[key] = value
+        updated = ReviewCandidate.model_validate(patch)
+        index = state.candidates.index(candidate)
+        state.candidates[index] = updated
+        if updated.candidate_type == CandidateType.PASSAGE and updated.start_question and updated.end_question:
+            new_passage_id = passage_id_for(exam_id, updated.start_question, updated.end_question)
+            _resync_question_passage_links(
+                state,
+                old_passage_id,
+                new_passage_id,
+                updated.start_question,
+                updated.end_question,
+            )
+        drafts = build_verified_drafts(state)
+        save_review_state(state, data_root=data_root)
+        write_verified_drafts(state, data_root=data_root, drafts=drafts)
+        return updated
 
 
 def _passage_draft_from_candidate(exam_id: str, candidate: ReviewCandidate) -> VerifiedPassageDraft | None:
@@ -415,8 +471,13 @@ def build_verified_drafts(state: ReviewState) -> tuple[list[VerifiedPassageDraft
     return passages, questions
 
 
-def write_verified_drafts(state: ReviewState, *, data_root: Path = Path("data")) -> tuple[Path, Path]:
-    passages, questions = build_verified_drafts(state)
+def write_verified_drafts(
+    state: ReviewState,
+    *,
+    data_root: Path = Path("data"),
+    drafts: tuple[list[VerifiedPassageDraft], list[VerifiedQuestionDraft]] | None = None,
+) -> tuple[Path, Path]:
+    passages, questions = drafts if drafts is not None else build_verified_drafts(state)
     passage_path = passage_drafts_path(state.exam_id, data_root=data_root)
     question_path = question_drafts_path(state.exam_id, data_root=data_root)
     _write_jsonl(passage_path, passages)
@@ -483,8 +544,8 @@ def promote_verified(exam_id: str, *, data_root: Path = Path("data")) -> tuple[P
     out_dir.mkdir(parents=True, exist_ok=True)
     passage_path = out_dir / "passages.jsonl"
     question_path = out_dir / "questions.jsonl"
-    _write_jsonl(passage_path, passages)
-    _write_jsonl(question_path, questions)
+    _write_jsonl_atomic(passage_path, passages)
+    _write_jsonl_atomic(question_path, questions)
     return passage_path, question_path, len(passages), len(questions)
 
 
@@ -601,8 +662,9 @@ def workbench_html() -> str:
       const q = document.getElementById("queue"); q.innerHTML = "";
       state.candidates.filter(c => filter === "all" || c.status === filter).forEach(c => {
         const b = document.createElement("button"); b.className = "candidate";
-        b.innerHTML = `<strong>${c.suggestion_id}</strong><span>${c.candidate_type} · ${c.status}</span>`;
-        b.querySelector("span").textContent = `${c.candidate_type} - ${c.status}`;
+        const strong = document.createElement("strong"); strong.textContent = c.suggestion_id;
+        const span = document.createElement("span"); span.textContent = `${c.candidate_type} - ${c.status}`;
+        b.append(strong, span);
         b.onclick = () => select(c.candidate_id); q.appendChild(b);
       });
     }
@@ -769,8 +831,8 @@ class VerificationWorkbench:
             _json_response(handler, {"error": "candidate has no preview"}, HTTPStatus.NOT_FOUND)
             return
         path = Path(candidate.preview_path).resolve()
-        allowed = {Path(item.preview_path).resolve() for item in state.candidates if item.preview_path}
-        if path not in allowed or not path.exists():
+        suggestions_root = Path(state.suggestions_path).resolve().parent
+        if not _is_relative_to(path, suggestions_root) or not path.exists() or not path.is_file():
             _json_response(handler, {"error": "preview not found"}, HTTPStatus.NOT_FOUND)
             return
         content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
