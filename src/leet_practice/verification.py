@@ -708,6 +708,7 @@ def generate_ocr_draft(
     question_number: int | None = None,
     options: DraftOptions | None = None,
     cleanup_backends: CleanupBackends | None = None,
+    spacing_result: tuple[str, list[str], list[str]] | None = None,
     morphology_result: tuple[list[str], list[str]] | None = None,
 ) -> OcrDraft:
     """Generate a review draft from raw OCR text without changing the raw text."""
@@ -718,7 +719,7 @@ def generate_ocr_draft(
     steps: list[str] = ["ocr_heuristic_prefill"]
 
     if options.enable_spacing_cleanup and text:
-        text, spacing_warnings, spacing_steps = _apply_spacing_cleanup(text, cleanup_backends)
+        text, spacing_warnings, spacing_steps = spacing_result or _apply_spacing_cleanup(text, cleanup_backends)
         warnings.extend(spacing_warnings)
         steps.extend(spacing_steps)
 
@@ -819,6 +820,7 @@ def apply_ocr_draft(
     options: DraftOptions | None = None,
     *,
     cleanup_backends: CleanupBackends | None = None,
+    spacing_result: tuple[str, list[str], list[str]] | None = None,
     morphology_result: tuple[list[str], list[str]] | None = None,
 ) -> ReviewCandidate:
     draft = generate_ocr_draft(
@@ -827,6 +829,7 @@ def apply_ocr_draft(
         question_number=candidate.question_number,
         options=options,
         cleanup_backends=cleanup_backends,
+        spacing_result=spacing_result,
         morphology_result=morphology_result,
     )
     patch = candidate.model_dump()
@@ -842,17 +845,28 @@ def apply_ocr_draft(
     return ReviewCandidate.model_validate(patch)
 
 
-def _texts_after_spacing_cleanup(
+def _spacing_cleanup_results(
     candidates: list[ReviewCandidate],
     options: DraftOptions,
     cleanup_backends: CleanupBackends | None,
-) -> list[str]:
-    texts: list[str] = []
+) -> list[tuple[str, list[str], list[str]] | None]:
+    results: list[tuple[str, list[str], list[str]] | None] = []
     for candidate in candidates:
         text = candidate.raw_ocr_text.strip()
         if options.enable_spacing_cleanup and text:
-            text, _, _ = _apply_spacing_cleanup(text, cleanup_backends)
-        texts.append(text)
+            results.append(_apply_spacing_cleanup(text, cleanup_backends))
+        else:
+            results.append(None)
+    return results
+
+
+def _morphology_texts(
+    candidates: list[ReviewCandidate],
+    spacing_results: list[tuple[str, list[str], list[str]] | None],
+) -> list[str]:
+    texts: list[str] = []
+    for candidate, spacing_result in zip(candidates, spacing_results, strict=True):
+        texts.append(spacing_result[0] if spacing_result is not None else candidate.raw_ocr_text.strip())
     return texts
 
 
@@ -864,9 +878,10 @@ def apply_ocr_drafts(
 ) -> list[ReviewCandidate]:
     options = options or DraftOptions()
     cleanup_backends = cleanup_backends or build_cleanup_backends(options)
+    spacing_results = _spacing_cleanup_results(candidates, options, cleanup_backends)
     morphology_results: list[tuple[list[str], list[str]] | None] = [None] * len(candidates)
-    if options.enable_morphology_checks and not options.enable_spacing_cleanup:
-        morphology_texts = _texts_after_spacing_cleanup(candidates, options, cleanup_backends)
+    if options.enable_morphology_checks:
+        morphology_texts = _morphology_texts(candidates, spacing_results)
         non_empty_indexes = [index for index, text in enumerate(morphology_texts) if text]
         non_empty_texts = [morphology_texts[index] for index in non_empty_indexes]
         batch_results = _kiwi_morphology_warnings_batch(non_empty_texts, cleanup_backends) if non_empty_texts else []
@@ -877,6 +892,7 @@ def apply_ocr_drafts(
             candidate,
             options,
             cleanup_backends=cleanup_backends,
+            spacing_result=spacing_results[index],
             morphology_result=morphology_results[index],
         )
         for index, candidate in enumerate(candidates)

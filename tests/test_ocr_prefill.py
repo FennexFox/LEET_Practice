@@ -794,23 +794,24 @@ def test_morphology_batch_falls_back_to_per_text_tokenize(
     assert all("kiwi_morphology_checked" in candidate.correction_steps for candidate in state.candidates)
 
 
-def test_combined_spacing_and_morphology_checks_tokenize_after_spacing_cleanup(
+def test_combined_spacing_and_morphology_checks_batch_analyzes_spacing_cleaned_texts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    tokenized_texts: list[str] = []
+    calls: dict[str, object] = {"spacing_calls": 0, "analyze_texts": []}
 
     class FakeSpacing:
         def __call__(self, text: str) -> str:
+            calls["spacing_calls"] = int(calls["spacing_calls"]) + 1
             return text.replace("withoutspace", "without space")
 
     class FakeKiwi:
         def analyze(self, texts: list[str]) -> list[tuple[list[object], float]]:
-            raise AssertionError("combined spacing+morphology path intentionally uses per-text tokenize")
+            calls["analyze_texts"] = list(texts)
+            return [([object()], 0.0) for _ in texts]
 
         def tokenize(self, text: str) -> list[object]:
-            tokenized_texts.append(text)
-            return [object()]
+            raise AssertionError("successful combined batch path should not call per-text tokenize")
 
     def fake_import(name: str):
         if name == "pykospacing":
@@ -834,7 +835,8 @@ def test_combined_spacing_and_morphology_checks_tokenize_after_spacing_cleanup(
         enable_morphology_checks=True,
     )
 
-    assert tokenized_texts == [candidate.ocr_draft_text for candidate in state.candidates]
-    assert all("withoutspace" not in text for text in tokenized_texts)
+    assert calls["spacing_calls"] == len(state.candidates)
+    assert calls["analyze_texts"] == [candidate.ocr_draft_text for candidate in state.candidates]
+    assert all("withoutspace" not in text for text in calls["analyze_texts"])
     assert all("spacing_cleanup:pykospacing" in candidate.correction_steps for candidate in state.candidates)
     assert all("kiwi_morphology_checked" in candidate.correction_steps for candidate in state.candidates)
