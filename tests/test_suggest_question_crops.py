@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -39,6 +40,28 @@ def test_edge_header_fragment_ocr_as_geuho_is_excluded() -> None:
     assert module.classify_excluded_row("\uadf8\ud638", [0, 595, 93, 681], 1392, 4415) == [
         "short-header-footer-fragment-at-page-edge"
     ]
+
+
+def test_run_with_heartbeat_reports_long_running_action(monkeypatch) -> None:
+    module = _load_suggest_question_crops()
+    messages: list[str] = []
+
+    monkeypatch.setitem(module.run_with_heartbeat.__globals__, "progress", messages.append)
+
+    def action() -> str:
+        deadline = time.perf_counter() + 1
+        while not messages and time.perf_counter() < deadline:
+            time.sleep(0.001)
+        return "done"
+
+    result = module.run_with_heartbeat(
+        "Test operation",
+        action,
+        interval_seconds=0.01,
+    )
+
+    assert result == "done"
+    assert any("Test operation still running" in message for message in messages)
 
 
 def _ocr_args(**overrides):
@@ -156,6 +179,39 @@ def test_run_ocr_for_blocks_uses_batch_and_writes_compact_artifacts(
         "options",
         "rows",
     }
+
+
+def test_run_ocr_for_blocks_batches_in_progress_chunks(tmp_path: Path, monkeypatch) -> None:
+    module = _load_suggest_question_crops()
+    raw_blocks = [_raw_block(module, index, index + 1, "left", tmp_path) for index in range(5)]
+    calls: list[list[str]] = []
+
+    def fake_batch(image_paths, args):
+        calls.append([path.name for path in image_paths])
+        return [
+            ("", {"language": "korean", "runtime_flags": {}, "rows": [{"text": path.stem, "confidence": 0.9}]})
+            for path in image_paths
+        ]
+
+    monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "OCR_BATCH_PROGRESS_CHUNK_SIZE", 2)
+    monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "run_paddleocr_batch", fake_batch)
+
+    ocr_blocks, errors, interrupted = module.run_ocr_for_blocks(raw_blocks, _ocr_args(), tmp_path)
+
+    assert errors == []
+    assert interrupted is False
+    assert calls == [
+        ["page_001_left.png", "page_002_left.png"],
+        ["page_003_left.png", "page_004_left.png"],
+        ["page_005_left.png"],
+    ]
+    assert [block.raw_rows[0]["text"] for block in ocr_blocks] == [
+        "page_001_left",
+        "page_002_left",
+        "page_003_left",
+        "page_004_left",
+        "page_005_left",
+    ]
 
 
 def test_run_ocr_for_blocks_falls_back_when_batch_fails(tmp_path: Path, monkeypatch) -> None:

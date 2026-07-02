@@ -17,12 +17,13 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import threading
 import time
 import traceback
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from leet_practice.compare_ocr_engines import (
     extract_paddle_rows,
@@ -62,6 +63,8 @@ HEADER_FOOTER_EDGE_TEXT_RE = re.compile(
 HEADER_FOOTER_TOP_EDGE_RATIO = 0.18
 HEADER_FOOTER_BOTTOM_EDGE_RATIO = 0.92
 STANDALONE_NUMBER_TOP_EDGE_RATIO = 0.10
+OCR_BATCH_HEARTBEAT_SECONDS = 30.0
+OCR_BATCH_PROGRESS_CHUNK_SIZE = 4
 
 
 def elapsed_seconds(start: float) -> float:
@@ -70,6 +73,59 @@ def elapsed_seconds(start: float) -> float:
 
 def progress(message: str) -> None:
     print(message, flush=True)
+
+
+def run_with_heartbeat(
+    operation: str,
+    action: Callable[[], Any],
+    *,
+    start: float | None = None,
+    interval_seconds: float = OCR_BATCH_HEARTBEAT_SECONDS,
+) -> Any:
+    started = start or time.perf_counter()
+    stop_event = threading.Event()
+
+    def heartbeat() -> None:
+        while not stop_event.wait(interval_seconds):
+            progress(f"{operation} still running ({elapsed_seconds(started):.0f}s elapsed).")
+
+    thread = threading.Thread(target=heartbeat, name=f"{operation} heartbeat", daemon=True)
+    thread.start()
+    try:
+        return action()
+    finally:
+        stop_event.set()
+        thread.join(timeout=0.1)
+
+
+def run_paddleocr_batch_with_progress(
+    raw_blocks: list[RawBlock],
+    args: argparse.Namespace,
+    *,
+    batch_start: float,
+) -> list[tuple[str, dict[str, Any]]]:
+    image_paths = [Path(raw_block.image_path) for raw_block in raw_blocks]
+    chunk_size = max(1, OCR_BATCH_PROGRESS_CHUNK_SIZE)
+    chunk_count = (len(image_paths) + chunk_size - 1) // chunk_size
+    batch_results: list[tuple[str, dict[str, Any]]] = []
+    for chunk_index, offset in enumerate(range(0, len(image_paths), chunk_size), start=1):
+        chunk_paths = image_paths[offset : offset + chunk_size]
+        chunk_start = time.perf_counter()
+        progress(
+            f"Running PaddleOCR batch chunk {chunk_index}/{chunk_count} "
+            f"({len(chunk_paths)} page-column blocks)..."
+        )
+        chunk_results = run_with_heartbeat(
+            f"PaddleOCR batch chunk {chunk_index}/{chunk_count}",
+            lambda paths=chunk_paths: run_paddleocr_batch(paths, args),
+            start=chunk_start,
+        )
+        progress(
+            f"Finished PaddleOCR batch chunk {chunk_index}/{chunk_count} "
+            f"({elapsed_seconds(chunk_start):.3f}s, total {elapsed_seconds(batch_start):.3f}s)."
+        )
+        batch_results.extend(chunk_results)
+    return batch_results
 
 
 @dataclass(frozen=True)
@@ -1396,13 +1452,15 @@ def run_ocr_for_blocks(
         return _run_ocr_for_blocks_individually(raw_blocks, args, run_dir)
 
     batch_start = time.perf_counter()
-    progress(f"Running PaddleOCR batch on {len(raw_blocks)} page-column blocks...")
-    progress("PaddleOCR batch is running inside the OCR library; per-block progress appears after the batch returns.")
+    chunk_size = max(1, OCR_BATCH_PROGRESS_CHUNK_SIZE)
+    chunk_count = (len(raw_blocks) + chunk_size - 1) // chunk_size
+    progress(f"Running PaddleOCR batch on {len(raw_blocks)} page-column blocks in {chunk_count} chunks...")
+    progress("PaddleOCR batch is running inside the OCR library; heartbeat appears while each chunk is active.")
     try:
         # PaddleOCR batch results are accepted only when the output list preserves
         # input image order. If future return shapes expose source metadata, use
         # it here to validate the mapping before writing per-column artifacts.
-        batch_results = run_paddleocr_batch([Path(raw_block.image_path) for raw_block in raw_blocks], args)
+        batch_results = run_paddleocr_batch_with_progress(raw_blocks, args, batch_start=batch_start)
         if len(batch_results) != len(raw_blocks):
             raise ValueError("Batch OCR result count did not match input block count")
         progress(
