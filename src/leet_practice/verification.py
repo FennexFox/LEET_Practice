@@ -1172,6 +1172,15 @@ def _preserve_review_edits(fresh: ReviewState, existing: ReviewState) -> ReviewS
     return fresh
 
 
+def _review_state_satisfies_options(state: ReviewState, requested: DraftOptions) -> bool:
+    existing = state.draft_options or {}
+    if requested.enable_spacing_cleanup and not existing.get("enable_spacing_cleanup"):
+        return False
+    if requested.enable_morphology_checks and not existing.get("enable_morphology_checks"):
+        return False
+    return True
+
+
 def initialize_review_state(
     exam_id: str,
     suggestions_path: Path,
@@ -1187,16 +1196,20 @@ def initialize_review_state(
     """Create or load review state for a suggestions file."""
 
     path = review_state_path(exam_id, data_root=data_root)
-    if path.exists() and not overwrite and not refresh_preserving_edits:
-        if progress:
-            progress(f"Loading existing review state: {path}")
-        return load_review_state(exam_id, data_root=data_root)
-    existing = load_review_state(exam_id, data_root=data_root) if path.exists() and refresh_preserving_edits else None
     draft_options = DraftOptions(
         enable_spacing_cleanup=enable_spacing_cleanup,
         enable_morphology_checks=enable_morphology_checks,
         local_nlp_workers=local_nlp_workers or min(os.cpu_count() or 1, 4),
     )
+    existing = load_review_state(exam_id, data_root=data_root) if path.exists() and not overwrite else None
+    if existing is not None and not refresh_preserving_edits:
+        if _review_state_satisfies_options(existing, draft_options):
+            if progress:
+                progress(f"Loading existing review state: {path}")
+            return existing
+        refresh_preserving_edits = True
+        if progress:
+            progress("Existing review state is missing requested OCR draft cleanup; refreshing while preserving edits.")
     state = parse_suggestions(exam_id, suggestions_path, draft_options=draft_options, progress=progress)
     if existing is not None:
         if progress:

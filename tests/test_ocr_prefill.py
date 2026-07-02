@@ -543,6 +543,38 @@ def test_existing_user_edits_survive_normal_reload_and_explicit_reapply_overwrit
     assert reapplied.stem == "질문"
 
 
+def test_existing_state_refreshes_when_requested_cleanup_options_are_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing_backend(name: str):
+        raise ImportError(name)
+
+    monkeypatch.setattr(verification, "import_module", missing_backend)
+    suggestions_path = write_suggestion_run(
+        tmp_path,
+        question_text="Question 1?\n1) A\n2) B\n3) C\n4) D\n5) E",
+    )
+    data_root = tmp_path / "data"
+    initialize_review_state("leet-2026-verbal-even", suggestions_path, data_root=data_root)
+    update_candidate("leet-2026-verbal-even", "q01", {"stem": "Manual question"}, data_root=data_root)
+
+    refreshed = initialize_review_state(
+        "leet-2026-verbal-even",
+        suggestions_path,
+        data_root=data_root,
+        enable_spacing_cleanup=True,
+        enable_morphology_checks=True,
+    )
+
+    question = next(candidate for candidate in refreshed.candidates if candidate.candidate_id == "q01")
+    assert refreshed.draft_options["enable_spacing_cleanup"] is True
+    assert refreshed.draft_options["enable_morphology_checks"] is True
+    assert question.stem == "Manual question"
+    assert "spacing_backend_unavailable" in question.prefill_warnings
+    assert "kiwi_backend_unavailable" in question.prefill_warnings
+
+
 def test_missing_optional_backends_record_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
     def missing_backend(name: str):
         raise ImportError(name)
