@@ -200,6 +200,7 @@ def _run_review_crops(
     refresh_preserving_edits: bool = False,
     enable_spacing_cleanup: bool = False,
     enable_morphology_checks: bool = False,
+    local_nlp_workers: int | None = None,
     unsafe_allow_remote: bool = False,
 ) -> None:
     suggestions_path = suggestions or _latest_suggestions_path(exam_id)
@@ -215,6 +216,7 @@ def _run_review_crops(
             refresh_preserving_edits=refresh_preserving_edits,
             enable_spacing_cleanup=enable_spacing_cleanup,
             enable_morphology_checks=enable_morphology_checks,
+            local_nlp_workers=local_nlp_workers,
         )
     except VerificationError as exc:
         console.print(f"[red]Verification setup failed:[/red] {exc}")
@@ -282,6 +284,12 @@ def verify_command(
         "--enable-morphology-checks",
         help="Run optional Kiwi/kiwipiepy morphology checks for OCR draft warnings when installed.",
     ),
+    local_nlp_workers: int | None = typer.Option(
+        None,
+        "--local-nlp-workers",
+        min=1,
+        help="Worker count for optional Kiwi morphology checks. Defaults to min(os.cpu_count(), 4).",
+    ),
     unsafe_allow_remote: bool = typer.Option(
         False,
         "--unsafe-allow-remote",
@@ -303,6 +311,7 @@ def verify_command(
         refresh_preserving_edits=refresh_preserving_edits,
         enable_spacing_cleanup=enable_spacing_cleanup,
         enable_morphology_checks=enable_morphology_checks,
+        local_nlp_workers=local_nlp_workers,
         unsafe_allow_remote=unsafe_allow_remote,
     )
 
@@ -338,6 +347,12 @@ def review_crops_command(
         "--enable-morphology-checks",
         help="Run optional Kiwi/kiwipiepy morphology checks for OCR draft warnings when installed.",
     ),
+    local_nlp_workers: int | None = typer.Option(
+        None,
+        "--local-nlp-workers",
+        min=1,
+        help="Worker count for optional Kiwi morphology checks. Defaults to min(os.cpu_count(), 4).",
+    ),
     unsafe_allow_remote: bool = typer.Option(
         False,
         "--unsafe-allow-remote",
@@ -359,6 +374,7 @@ def review_crops_command(
         refresh_preserving_edits=refresh_preserving_edits,
         enable_spacing_cleanup=enable_spacing_cleanup,
         enable_morphology_checks=enable_morphology_checks,
+        local_nlp_workers=local_nlp_workers,
         unsafe_allow_remote=unsafe_allow_remote,
     )
 

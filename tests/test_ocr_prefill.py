@@ -609,3 +609,275 @@ def test_kiwipiepy_spacing_backend_records_metadata(monkeypatch: pytest.MonkeyPa
 
     assert draft.verified_text == "without space"
     assert "spacing_cleanup:kiwipiepy" in draft.correction_steps
+
+
+def test_review_state_initialization_reuses_cleanup_backend_instances(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counts = {"spacing_init": 0, "kiwi_init": 0}
+
+    class FakeSpacing:
+        def __init__(self) -> None:
+            counts["spacing_init"] += 1
+
+        def __call__(self, text: str) -> str:
+            return text.replace("withoutspace", "without space")
+
+    class FakeKiwi:
+        def __init__(self, num_workers: int | None = None) -> None:
+            counts["kiwi_init"] += 1
+            self.num_workers = num_workers
+
+        def tokenize(self, text: str) -> list[object]:
+            return [object()] if text else []
+
+    def fake_import(name: str):
+        if name == "pykospacing":
+            return SimpleNamespace(Spacing=FakeSpacing)
+        if name == "kiwipiepy":
+            return SimpleNamespace(Kiwi=FakeKiwi)
+        raise ImportError(name)
+
+    monkeypatch.setattr(verification, "import_module", fake_import)
+    suggestions_path = write_suggestion_run(
+        tmp_path,
+        passage_text="withoutspace passage",
+        question_text="1. withoutspace question\n1) one\n2) two\n3) three\n4) four\n5) five",
+    )
+
+    state = initialize_review_state(
+        "leet-2026-verbal-even",
+        suggestions_path,
+        data_root=tmp_path / "data",
+        enable_spacing_cleanup=True,
+        enable_morphology_checks=True,
+    )
+
+    assert len(state.candidates) == 2
+    assert counts == {"spacing_init": 1, "kiwi_init": 1}
+    assert all("spacing_cleanup:pykospacing" in candidate.correction_steps for candidate in state.candidates)
+    assert all("kiwi_morphology_checked" in candidate.correction_steps for candidate in state.candidates)
+
+
+def test_spacing_backend_init_failure_still_allows_kiwi_morphology(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingSpacing:
+        def __init__(self) -> None:
+            raise RuntimeError("spacing init failed")
+
+    class FakeKiwi:
+        def analyze(self, texts: list[str]) -> list[list[tuple[list[object], float]]]:
+            return [[([object()], 0.0)] for _ in texts]
+
+        def tokenize(self, text: str) -> list[object]:
+            raise AssertionError("batch morphology should not call per-text tokenize")
+
+    def fake_import(name: str):
+        if name == "pykospacing":
+            return SimpleNamespace(Spacing=FailingSpacing)
+        if name == "kiwipiepy":
+            return SimpleNamespace(Kiwi=lambda **_: FakeKiwi())
+        raise ImportError(name)
+
+    monkeypatch.setattr(verification, "import_module", fake_import)
+    suggestions_path = write_suggestion_run(
+        tmp_path,
+        passage_text="passage text",
+        question_text="1. question\n1) one\n2) two\n3) three\n4) four\n5) five",
+    )
+
+    state = initialize_review_state(
+        "leet-2026-verbal-even",
+        suggestions_path,
+        data_root=tmp_path / "data",
+        enable_spacing_cleanup=True,
+        enable_morphology_checks=True,
+    )
+
+    assert all("spacing_backend_failed:pykospacing:spacing init failed" in candidate.prefill_warnings for candidate in state.candidates)
+    assert all("kiwi_morphology_checked" in candidate.correction_steps for candidate in state.candidates)
+
+
+def test_morphology_batch_uses_configured_kiwi_workers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {"workers": None, "analyze_texts": []}
+
+    class FakeKiwi:
+        def __init__(self, num_workers: int | None = None) -> None:
+            calls["workers"] = num_workers
+
+        def analyze(self, texts: list[str]) -> list[list[tuple[list[object], float]]]:
+            calls["analyze_texts"] = list(texts)
+            return [[([object()], 0.0)] for _ in texts]
+
+        def tokenize(self, text: str) -> list[object]:
+            raise AssertionError("batch morphology should not call per-text tokenize")
+
+    def fake_import(name: str):
+        if name == "kiwipiepy":
+            return SimpleNamespace(Kiwi=FakeKiwi)
+        raise ImportError(name)
+
+    monkeypatch.setattr(verification, "import_module", fake_import)
+    suggestions_path = write_suggestion_run(
+        tmp_path,
+        passage_text="첫 줄",
+        question_text="1. 질문\n1) one\n2) two\n3) three\n4) four\n5) five",
+    )
+
+    state = initialize_review_state(
+        "leet-2026-verbal-even",
+        suggestions_path,
+        data_root=tmp_path / "data",
+        enable_morphology_checks=True,
+        local_nlp_workers=8,
+    )
+
+    assert calls["workers"] == 8
+    assert calls["analyze_texts"] == [candidate.raw_ocr_text for candidate in state.candidates]
+    assert all("kiwi_morphology_checked" in candidate.correction_steps for candidate in state.candidates)
+
+
+def test_kiwipiepy_spacing_fallback_does_not_use_local_nlp_workers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    init_kwargs: list[dict[str, object]] = []
+
+    class FakeKiwi:
+        def __init__(self, **kwargs: object) -> None:
+            init_kwargs.append(dict(kwargs))
+
+        def space(self, text: str) -> str:
+            return text.replace("withoutspace", "without space")
+
+    def fake_import(name: str):
+        if name == "kiwipiepy":
+            return SimpleNamespace(Kiwi=FakeKiwi)
+        raise ImportError(name)
+
+    monkeypatch.setattr(verification, "import_module", fake_import)
+    suggestions_path = write_suggestion_run(
+        tmp_path,
+        passage_text="withoutspace passage",
+        question_text="1. withoutspace question\n1) one\n2) two\n3) three\n4) four\n5) five",
+    )
+
+    initialize_review_state(
+        "leet-2026-verbal-even",
+        suggestions_path,
+        data_root=tmp_path / "data",
+        enable_spacing_cleanup=True,
+        local_nlp_workers=8,
+    )
+
+    assert init_kwargs == [{}]
+
+
+@pytest.mark.parametrize("mode", ["missing_analyze", "analyze_raises", "count_mismatch"])
+def test_morphology_batch_falls_back_to_per_text_tokenize(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    tokenized_texts: list[str] = []
+
+    if mode == "missing_analyze":
+
+        class FakeKiwi:
+            def __init__(self, num_workers: int | None = None) -> None:
+                self.num_workers = num_workers
+
+            def tokenize(self, text: str) -> list[object]:
+                tokenized_texts.append(text)
+                return [object()]
+
+    else:
+
+        class FakeKiwi:
+            def __init__(self, num_workers: int | None = None) -> None:
+                self.num_workers = num_workers
+
+            def analyze(self, texts: list[str]) -> list[list[tuple[list[object], float]]]:
+                if mode == "analyze_raises":
+                    raise RuntimeError("batch failed")
+                return [[([object()], 0.0)]]
+
+            def tokenize(self, text: str) -> list[object]:
+                tokenized_texts.append(text)
+                return [object()]
+
+    def fake_import(name: str):
+        if name == "kiwipiepy":
+            return SimpleNamespace(Kiwi=FakeKiwi)
+        raise ImportError(name)
+
+    monkeypatch.setattr(verification, "import_module", fake_import)
+    suggestions_path = write_suggestion_run(
+        tmp_path,
+        passage_text="passage text",
+        question_text="1. question\n1) one\n2) two\n3) three\n4) four\n5) five",
+    )
+
+    state = initialize_review_state(
+        "leet-2026-verbal-even",
+        suggestions_path,
+        data_root=tmp_path / "data",
+        enable_morphology_checks=True,
+    )
+
+    assert tokenized_texts == [candidate.raw_ocr_text for candidate in state.candidates]
+    assert all("kiwi_morphology_checked" in candidate.correction_steps for candidate in state.candidates)
+
+
+def test_combined_spacing_and_morphology_checks_batch_analyzes_spacing_cleaned_texts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {"spacing_calls": 0, "analyze_texts": []}
+
+    class FakeSpacing:
+        def __call__(self, text: str) -> str:
+            calls["spacing_calls"] = int(calls["spacing_calls"]) + 1
+            return text.replace("withoutspace", "without space")
+
+    class FakeKiwi:
+        def analyze(self, texts: list[str]) -> list[list[tuple[list[object], float]]]:
+            calls["analyze_texts"] = list(texts)
+            return [[([object()], 0.0)] for _ in texts]
+
+        def tokenize(self, text: str) -> list[object]:
+            raise AssertionError("successful combined batch path should not call per-text tokenize")
+
+    def fake_import(name: str):
+        if name == "pykospacing":
+            return SimpleNamespace(Spacing=FakeSpacing)
+        if name == "kiwipiepy":
+            return SimpleNamespace(Kiwi=lambda **_: FakeKiwi())
+        raise ImportError(name)
+
+    monkeypatch.setattr(verification, "import_module", fake_import)
+    suggestions_path = write_suggestion_run(
+        tmp_path,
+        passage_text="withoutspace passage",
+        question_text="1. withoutspace question\n1) one\n2) two\n3) three\n4) four\n5) five",
+    )
+
+    state = initialize_review_state(
+        "leet-2026-verbal-even",
+        suggestions_path,
+        data_root=tmp_path / "data",
+        enable_spacing_cleanup=True,
+        enable_morphology_checks=True,
+    )
+
+    assert calls["spacing_calls"] == len(state.candidates)
+    assert calls["analyze_texts"] == [candidate.ocr_draft_text for candidate in state.candidates]
+    assert all("withoutspace" not in text for text in calls["analyze_texts"])
+    assert all("spacing_cleanup:pykospacing" in candidate.correction_steps for candidate in state.candidates)
+    assert all("kiwi_morphology_checked" in candidate.correction_steps for candidate in state.candidates)

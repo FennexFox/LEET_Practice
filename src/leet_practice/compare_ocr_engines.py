@@ -382,6 +382,44 @@ def run_paddleocr(image_path: Path, args: argparse.Namespace) -> tuple[str, dict
     return text_output, payload
 
 
+def run_paddleocr_batch(image_paths: list[Path], args: argparse.Namespace) -> list[tuple[str, dict[str, Any]]]:
+    """Run PaddleOCR with multi-image input when results preserve input order."""
+
+    if not image_paths:
+        return []
+    runtime_flags = configure_paddle_runtime(args)
+    ocr = get_paddleocr(args)
+    inputs = [str(path) for path in image_paths]
+
+    if hasattr(ocr, "predict"):
+        try:
+            result = ocr.predict(inputs)
+        except TypeError:
+            result = ocr.ocr(inputs)
+    else:
+        result = ocr.ocr(inputs)
+
+    payload_raw = safe_jsonable(result)
+    if not isinstance(payload_raw, list) or len(payload_raw) != len(image_paths):
+        raise ValueError("PaddleOCR batch output did not match input image count")
+
+    results: list[tuple[str, dict[str, Any]]] = []
+    for item in payload_raw:
+        rows = extract_paddle_rows(item)
+        text_output = "\n".join(format_paddle_row(row) for row in rows)
+        if not text_output.strip():
+            text_output = json.dumps(item, ensure_ascii=False, indent=2)
+        payload = {
+            "engine": "paddleocr",
+            "language": str(args.paddle_lang),
+            "runtime_flags": runtime_flags,
+            "rows": rows,
+            "raw": item,
+        }
+        results.append((text_output, payload))
+    return results
+
+
 def format_paddle_row(row: dict[str, Any]) -> str:
     text = str(row.get("text", ""))
     confidence = row.get("confidence")

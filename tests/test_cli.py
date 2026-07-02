@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
-from leet_practice.cli import app
+from leet_practice import cli
+
+app = cli.app
 
 
 def test_review_crops_rejects_non_loopback_host_without_unsafe_opt_in(tmp_path, suggestion_run: Path) -> None:
@@ -162,3 +165,66 @@ def test_ocr_invalid_pages_fails_before_creating_run_dir(tmp_path: Path) -> None
     assert result.exit_code == 1
     assert "Invalid PAGES" in result.output
     assert not (out_dir / "should-not-exist").exists()
+
+
+def test_verify_forwards_local_nlp_workers(tmp_path: Path, suggestion_run: Path, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_initialize_review_state(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(candidates=[])
+
+    monkeypatch.setattr(cli, "initialize_review_state", fake_initialize_review_state)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "verify",
+            "leet-2026-verbal-even",
+            "--suggestions",
+            str(suggestion_run),
+            "--data-root",
+            str(tmp_path / "data"),
+            "--enable-morphology-checks",
+            "--local-nlp-workers",
+            "7",
+            "--init-only",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["kwargs"]["enable_morphology_checks"] is True
+    assert captured["kwargs"]["local_nlp_workers"] == 7
+
+
+def test_review_crops_forwards_local_nlp_workers(tmp_path: Path, suggestion_run: Path, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_initialize_review_state(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(candidates=[])
+
+    monkeypatch.setattr(cli, "initialize_review_state", fake_initialize_review_state)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "review-crops",
+            "--exam-id",
+            "leet-2026-verbal-even",
+            "--suggestions",
+            str(suggestion_run),
+            "--data-root",
+            str(tmp_path / "data"),
+            "--enable-morphology-checks",
+            "--local-nlp-workers",
+            "6",
+            "--init-only",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["kwargs"]["enable_morphology_checks"] is True
+    assert captured["kwargs"]["local_nlp_workers"] == 6

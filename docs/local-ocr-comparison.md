@@ -97,11 +97,24 @@ leet-practice ocr leet-2026-verbal-even 1-10 `
 ```
 
 The tool renders each requested page, splits it into left and right content
-blocks, runs PaddleOCR on each block, and builds a virtual reading stream:
+blocks, runs PaddleOCR for those blocks, and builds a virtual reading stream:
 
 ```text
 page 1 left -> page 1 right -> page 2 left -> page 2 right -> ...
 ```
+
+Internally, the crop suggestion pipeline is staged as page/column block
+preparation, OCR execution, stream construction, and suggestion artifact
+generation. When the installed PaddleOCR version accepts multi-image input, OCR
+is attempted as one batch over the prepared page-column blocks. If batch input
+is unsupported, returns an incompatible result shape, or raises at runtime, the
+tool falls back to the existing per-block OCR loop and preserves the same output
+filenames and `suggestions.json` shape.
+
+Batch OCR assumes PaddleOCR returns results in the same order as the input image
+list. If a future PaddleOCR return shape exposes source-image metadata, the tool
+should validate against that metadata before mapping results back to page-column
+blocks.
 
 It then looks for conservative question-number anchors and LEET set-header
 anchors such as `[1~3]`. Set headers are used to emit passage candidates from
