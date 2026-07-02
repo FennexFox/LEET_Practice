@@ -1378,6 +1378,9 @@ def run_ocr_for_blocks(
 
     print(f"Running PaddleOCR batch on {len(raw_blocks)} page-column blocks...")
     try:
+        # PaddleOCR batch results are accepted only when the output list preserves
+        # input image order. If future return shapes expose source metadata, use
+        # it here to validate the mapping before writing per-column artifacts.
         batch_results = run_paddleocr_batch([Path(raw_block.image_path) for raw_block in raw_blocks], args)
         if len(batch_results) != len(raw_blocks):
             raise ValueError("Batch OCR result count did not match input block count")

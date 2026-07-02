@@ -68,6 +68,51 @@ def _raw_block(module, index: int, page: int, column: str, tmp_path: Path):
     )
 
 
+def test_prepare_page_column_blocks_preserves_page_column_reading_order(tmp_path: Path, monkeypatch) -> None:
+    module = _load_suggest_question_crops()
+    render_calls: list[int] = []
+
+    def fake_render(pdf_path, page, dpi, run_dir, args):
+        render_calls.append(page)
+        return tmp_path / f"page_{page:03d}.png"
+
+    def fake_crop(page_image_path, run_dir, page, args):
+        return [
+            {
+                "page": page,
+                "column": "left",
+                "page_image_path": str(page_image_path),
+                "image_path": str(tmp_path / f"page_{page:03d}_left.png"),
+                "page_bbox": [0, 0, 100, 200],
+                "local_size": [100, 200],
+            },
+            {
+                "page": page,
+                "column": "right",
+                "page_image_path": str(page_image_path),
+                "image_path": str(tmp_path / f"page_{page:03d}_right.png"),
+                "page_bbox": [100, 0, 200, 200],
+                "local_size": [100, 200],
+            },
+        ]
+
+    monkeypatch.setitem(module.prepare_page_column_blocks.__globals__, "render_pdf_page_cached", fake_render)
+    monkeypatch.setitem(module.prepare_page_column_blocks.__globals__, "crop_page_columns", fake_crop)
+
+    blocks = module.prepare_page_column_blocks(
+        SimpleNamespace(pages="1-2", pdf=Path("paper.pdf"), dpi=300),
+        tmp_path,
+    )
+
+    assert render_calls == [1, 2]
+    assert [(block.sequence_index, block.page, block.column) for block in blocks] == [
+        (0, 1, "left"),
+        (1, 1, "right"),
+        (2, 2, "left"),
+        (3, 2, "right"),
+    ]
+
+
 def test_run_ocr_for_blocks_uses_batch_and_writes_compact_artifacts(
     tmp_path: Path,
     monkeypatch,
@@ -88,6 +133,12 @@ def test_run_ocr_for_blocks_uses_batch_and_writes_compact_artifacts(
 
     assert errors == []
     assert [block.raw_rows[0]["text"] for block in ocr_blocks] == ["1. left", "2. right"]
+    assert sorted(path.name for path in tmp_path.glob("*.paddleocr.*")) == [
+        "page_001_left.paddleocr.json",
+        "page_001_left.paddleocr.txt",
+        "page_001_right.paddleocr.json",
+        "page_001_right.paddleocr.txt",
+    ]
     payload = json.loads((tmp_path / "page_001_left.paddleocr.json").read_text(encoding="utf-8"))
     assert set(payload) == {
         "artifact_type",

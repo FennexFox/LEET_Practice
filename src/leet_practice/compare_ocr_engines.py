@@ -383,7 +383,7 @@ def run_paddleocr(image_path: Path, args: argparse.Namespace) -> tuple[str, dict
 
 
 def run_paddleocr_batch(image_paths: list[Path], args: argparse.Namespace) -> list[tuple[str, dict[str, Any]]]:
-    """Run PaddleOCR with multi-image input when the installed version supports it."""
+    """Run PaddleOCR with multi-image input when results preserve input order."""
 
     if not image_paths:
         return []

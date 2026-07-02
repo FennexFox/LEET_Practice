@@ -111,6 +111,11 @@ is unsupported, returns an incompatible result shape, or raises at runtime, the
 tool falls back to the existing per-block OCR loop and preserves the same output
 filenames and `suggestions.json` shape.
 
+Batch OCR assumes PaddleOCR returns results in the same order as the input image
+list. If a future PaddleOCR return shape exposes source-image metadata, the tool
+should validate against that metadata before mapping results back to page-column
+blocks.
+
 It then looks for conservative question-number anchors and LEET set-header
 anchors such as `[1~3]`. Set headers are used to emit passage candidates from
 the set header to the first question in that set, and to stop the last question

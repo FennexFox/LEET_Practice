@@ -504,7 +504,7 @@ def _is_circled_choice_marker(marker: str) -> bool:
     return "\u2460" <= marker <= "\u2464"
 
 
-def _build_kiwi(workers: int) -> tuple[Any | None, str | None]:
+def _build_kiwi(workers: int | None = None) -> tuple[Any | None, str | None]:
     try:
         module = import_module("kiwipiepy")
     except ImportError:
@@ -512,6 +512,8 @@ def _build_kiwi(workers: int) -> tuple[Any | None, str | None]:
     if not hasattr(module, "Kiwi"):
         return None, "kiwi_backend_unavailable:no_kiwi_class"
     try:
+        if workers is None:
+            return module.Kiwi(), None
         return module.Kiwi(num_workers=workers), None
     except TypeError:
         try:
@@ -564,14 +566,12 @@ def build_cleanup_backends(options: DraftOptions | None = None) -> CleanupBacken
                 backends.spacing_setup_warning = f"spacing_backend_failed:korspacing:{exc}"
                 return backends
 
-        kiwi, kiwi_warning = _build_kiwi(options.local_nlp_workers)
-        backends.kiwi = kiwi
-        backends.kiwi_setup_warning = kiwi_warning
-        if kiwi is None:
-            if kiwi_warning == "kiwi_backend_unavailable:no_kiwi_class":
+        spacing_kiwi, spacing_kiwi_warning = _build_kiwi()
+        if spacing_kiwi is None:
+            if spacing_kiwi_warning == "kiwi_backend_unavailable:no_kiwi_class":
                 backends.spacing_setup_warning = "spacing_backend_unavailable:kiwipiepy:no_kiwi_class"
-            elif kiwi_warning and kiwi_warning.startswith("kiwi_backend_failed:"):
-                backends.spacing_setup_warning = kiwi_warning.replace(
+            elif spacing_kiwi_warning and spacing_kiwi_warning.startswith("kiwi_backend_failed:"):
+                backends.spacing_setup_warning = spacing_kiwi_warning.replace(
                     "kiwi_backend_failed:",
                     "spacing_backend_failed:kiwipiepy:",
                     1,
@@ -579,7 +579,7 @@ def build_cleanup_backends(options: DraftOptions | None = None) -> CleanupBacken
             else:
                 backends.spacing_setup_warning = "spacing_backend_unavailable"
         else:
-            backends.spacing_backend = SpacingBackend("kiwipiepy", kiwi.space)
+            backends.spacing_backend = SpacingBackend("kiwipiepy", spacing_kiwi.space)
 
     if options.enable_morphology_checks and backends.kiwi is None:
         backends.kiwi, backends.kiwi_setup_warning = _build_kiwi(options.local_nlp_workers)
