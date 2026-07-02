@@ -322,4 +322,11 @@ def test_suggestions_payload_top_level_schema_is_stable(tmp_path: Path) -> None:
         "suggestions",
         "annotated_block_paths",
         "ocr_errors",
+        "timings",
     ]
+    assert set(payload["timings"]) == {
+        "anchor_detection_seconds",
+        "candidate_crops_seconds",
+        "annotated_blocks_seconds",
+        "build_suggestions_payload_seconds",
+    }

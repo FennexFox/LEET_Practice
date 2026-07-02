@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import time
 import traceback
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -61,6 +62,10 @@ HEADER_FOOTER_EDGE_TEXT_RE = re.compile(
 HEADER_FOOTER_TOP_EDGE_RATIO = 0.18
 HEADER_FOOTER_BOTTOM_EDGE_RATIO = 0.92
 STANDALONE_NUMBER_TOP_EDGE_RATIO = 0.10
+
+
+def elapsed_seconds(start: float) -> float:
+    return round(time.perf_counter() - start, 6)
 
 
 @dataclass(frozen=True)
@@ -1435,9 +1440,14 @@ def build_suggestions_payload(
     ocr_errors: list[dict[str, Any]],
     *,
     interrupted: bool,
+    timings: dict[str, float] | None = None,
 ) -> dict[str, Any]:
+    payload_start = time.perf_counter()
+    payload_timings = dict(timings or {})
     pages = parse_pages(args.pages)
     blocks_by_id = {block.block_id: block for block in blocks}
+
+    anchor_start = time.perf_counter()
     set_header_candidates, selected_set_headers = detect_set_header_candidates(rows, blocks_by_id, args.min_anchor_score)
     anchor_candidates, selected_anchors = detect_anchor_candidates(
         rows,
@@ -1445,6 +1455,9 @@ def build_suggestions_payload(
         args.min_anchor_score,
         args.allow_weak_question_anchors,
     )
+    payload_timings["anchor_detection_seconds"] = elapsed_seconds(anchor_start)
+
+    candidate_crop_start = time.perf_counter()
     suggestions = save_candidate_crops(
         run_dir=run_dir,
         blocks=blocks,
@@ -1454,11 +1467,16 @@ def build_suggestions_payload(
         crop_padding=args.crop_padding,
         keep_crop_part_images=args.keep_crop_part_images,
     )
+    payload_timings["candidate_crops_seconds"] = elapsed_seconds(candidate_crop_start)
+
+    annotated_start = time.perf_counter()
     annotated_paths = (
         []
         if args.no_annotated_blocks
         else save_annotated_blocks(run_dir, blocks, rows, selected_anchors, selected_set_headers)
     )
+    payload_timings["annotated_blocks_seconds"] = elapsed_seconds(annotated_start)
+    payload_timings["build_suggestions_payload_seconds"] = elapsed_seconds(payload_start)
 
     return {
         "artifact_type": "candidate_question_crop_suggestions",
@@ -1510,18 +1528,25 @@ def build_suggestions_payload(
         "suggestions": suggestions,
         "annotated_block_paths": annotated_paths,
         "ocr_errors": ocr_errors,
+        "timings": payload_timings,
     }
 
 
 def build_stream(args: argparse.Namespace, run_dir: Path) -> dict[str, Any]:
+    total_start = time.perf_counter()
+    timings: dict[str, float] = {}
     raw_blocks: list[RawBlock] = []
     ocr_blocks: list[OcrBlock] = []
     ocr_errors: list[dict[str, Any]] = []
     interrupted = False
 
     try:
+        prepare_start = time.perf_counter()
         raw_blocks = prepare_page_column_blocks(args, run_dir)
+        timings["prepare_page_column_blocks_seconds"] = elapsed_seconds(prepare_start)
+        ocr_start = time.perf_counter()
         ocr_blocks, ocr_errors, ocr_interrupted = run_ocr_for_blocks(raw_blocks, args, run_dir)
+        timings["ocr_seconds"] = elapsed_seconds(ocr_start)
         interrupted = ocr_interrupted or len(ocr_blocks) < len(raw_blocks)
         if interrupted:
             print("\nInterrupted; writing partial suggestions for completed OCR blocks...")
@@ -1529,8 +1554,10 @@ def build_stream(args: argparse.Namespace, run_dir: Path) -> dict[str, Any]:
         interrupted = True
         print("\nInterrupted; writing partial suggestions for completed OCR blocks...")
 
+    stream_start = time.perf_counter()
     blocks, rows = build_stream_from_ocr_blocks(ocr_blocks, args)
-    return build_suggestions_payload(
+    timings["build_stream_from_ocr_blocks_seconds"] = elapsed_seconds(stream_start)
+    payload = build_suggestions_payload(
         args,
         run_dir,
         blocks,
@@ -1538,7 +1565,10 @@ def build_stream(args: argparse.Namespace, run_dir: Path) -> dict[str, Any]:
         ocr_blocks,
         ocr_errors,
         interrupted=interrupted,
+        timings=timings,
     )
+    payload["timings"]["total_seconds"] = elapsed_seconds(total_start)
+    return payload
 
 
 def write_suggestions(run_dir: Path, payload: dict[str, Any]) -> Path:
@@ -1564,6 +1594,22 @@ def print_summary(run_dir: Path, payload: dict[str, Any]) -> None:
     print(f"- candidate suggestions: {len(payload['suggestions'])} ({passage_count} passage, {question_count} question)")
     if payload["ocr_errors"]:
         print(f"- OCR block errors: {len(payload['ocr_errors'])}")
+    timings = payload.get("timings") or {}
+    if timings:
+        print("- timings:")
+        for key in (
+            "prepare_page_column_blocks_seconds",
+            "ocr_seconds",
+            "build_stream_from_ocr_blocks_seconds",
+            "anchor_detection_seconds",
+            "candidate_crops_seconds",
+            "annotated_blocks_seconds",
+            "build_suggestions_payload_seconds",
+            "total_seconds",
+        ):
+            value = timings.get(key)
+            if isinstance(value, int | float):
+                print(f"  - {key}: {value:.3f}s")
     print(f"- suggestions: {run_dir / 'suggestions.json'}")
     print("\nAll crops are candidate suggestions for review, not verified question text.")
 
