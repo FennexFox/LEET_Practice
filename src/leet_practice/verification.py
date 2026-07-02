@@ -863,12 +863,18 @@ def _spacing_cleanup_results(
     candidates: list[ReviewCandidate],
     options: DraftOptions,
     cleanup_backends: CleanupBackends | None,
+    progress: Callable[[str], None] | None = None,
 ) -> list[tuple[str, list[str], list[str]] | None]:
     results: list[tuple[str, list[str], list[str]] | None] = []
+    total = sum(1 for candidate in candidates if candidate.raw_ocr_text.strip()) if options.enable_spacing_cleanup else 0
+    processed = 0
     for candidate in candidates:
         text = candidate.raw_ocr_text.strip()
         if options.enable_spacing_cleanup and text:
             results.append(_apply_spacing_cleanup(text, cleanup_backends))
+            processed += 1
+            if progress and (processed == total or processed % 10 == 0):
+                progress(f"Spacing cleanup progress: {processed}/{total} candidates.")
         else:
             results.append(None)
     return results
@@ -889,18 +895,32 @@ def apply_ocr_drafts(
     options: DraftOptions | None = None,
     *,
     cleanup_backends: CleanupBackends | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> list[ReviewCandidate]:
     options = options or DraftOptions()
     cleanup_backends = cleanup_backends or build_cleanup_backends(options)
-    spacing_results = _spacing_cleanup_results(candidates, options, cleanup_backends)
+    if progress:
+        progress(f"Preparing OCR drafts for {len(candidates)} candidates.")
+    if progress and options.enable_spacing_cleanup:
+        progress("Applying local Korean spacing cleanup.")
+    spacing_results = _spacing_cleanup_results(candidates, options, cleanup_backends, progress)
     morphology_results: list[tuple[list[str], list[str]] | None] = [None] * len(candidates)
     if options.enable_morphology_checks:
         morphology_texts = _morphology_texts(candidates, spacing_results)
         non_empty_indexes = [index for index, text in enumerate(morphology_texts) if text]
         non_empty_texts = [morphology_texts[index] for index in non_empty_indexes]
+        if progress:
+            progress(
+                f"Running Kiwi morphology checks for {len(non_empty_texts)} candidates "
+                f"with {options.local_nlp_workers} worker(s)."
+            )
         batch_results = _kiwi_morphology_warnings_batch(non_empty_texts, cleanup_backends) if non_empty_texts else []
         for index, result in zip(non_empty_indexes, batch_results, strict=True):
             morphology_results[index] = result
+        if progress:
+            progress(f"Kiwi morphology checks complete for {len(non_empty_texts)} candidates.")
+    if progress:
+        progress("Applying OCR draft fields to review candidates.")
     return [
         apply_ocr_draft(
             candidate,
@@ -1041,11 +1061,14 @@ def parse_suggestions(
     suggestions_path: Path,
     *,
     draft_options: DraftOptions | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> ReviewState:
     """Parse a crop-suggestion artifact into a review state."""
 
     draft_options = draft_options or DraftOptions()
     suggestions_path = suggestions_path.resolve()
+    if progress:
+        progress(f"Loading crop suggestions: {suggestions_path}")
     payload = _read_json(suggestions_path)
     suggestions_dir = suggestions_path.parent
     candidates: list[ReviewCandidate] = []
@@ -1082,6 +1105,13 @@ def parse_suggestions(
             },
         )
         candidates.append(candidate)
+    if progress:
+        progress(f"Loaded {len(candidates)} review candidates from suggestions.")
+    if progress and (draft_options.enable_spacing_cleanup or draft_options.enable_morphology_checks):
+        progress("Initializing local NLP backends for OCR draft cleanup.")
+    cleanup_backends = build_cleanup_backends(draft_options)
+    if progress and (draft_options.enable_spacing_cleanup or draft_options.enable_morphology_checks):
+        progress("Local NLP backend initialization complete.")
     return ReviewState(
         exam_id=exam_id,
         suggestions_path=str(suggestions_path),
@@ -1089,7 +1119,8 @@ def parse_suggestions(
         candidates=apply_ocr_drafts(
             candidates,
             draft_options,
-            cleanup_backends=build_cleanup_backends(draft_options),
+            cleanup_backends=cleanup_backends,
+            progress=progress,
         ),
     )
 
@@ -1151,11 +1182,14 @@ def initialize_review_state(
     enable_spacing_cleanup: bool = False,
     enable_morphology_checks: bool = False,
     local_nlp_workers: int | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> ReviewState:
     """Create or load review state for a suggestions file."""
 
     path = review_state_path(exam_id, data_root=data_root)
     if path.exists() and not overwrite and not refresh_preserving_edits:
+        if progress:
+            progress(f"Loading existing review state: {path}")
         return load_review_state(exam_id, data_root=data_root)
     existing = load_review_state(exam_id, data_root=data_root) if path.exists() and refresh_preserving_edits else None
     draft_options = DraftOptions(
@@ -1163,11 +1197,19 @@ def initialize_review_state(
         enable_morphology_checks=enable_morphology_checks,
         local_nlp_workers=local_nlp_workers or min(os.cpu_count() or 1, 4),
     )
-    state = parse_suggestions(exam_id, suggestions_path, draft_options=draft_options)
+    state = parse_suggestions(exam_id, suggestions_path, draft_options=draft_options, progress=progress)
     if existing is not None:
+        if progress:
+            progress("Preserving existing manual review edits.")
         state = _preserve_review_edits(state, existing)
+    if progress:
+        progress(f"Writing review state: {path}")
     save_review_state(state, data_root=data_root)
+    if progress:
+        progress("Writing verified draft files.")
     write_verified_drafts(state, data_root=data_root)
+    if progress:
+        progress("Review state initialization complete.")
     return state
 
 

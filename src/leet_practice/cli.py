@@ -217,6 +217,7 @@ def _run_review_crops(
             enable_spacing_cleanup=enable_spacing_cleanup,
             enable_morphology_checks=enable_morphology_checks,
             local_nlp_workers=local_nlp_workers,
+            progress=console.print,
         )
     except VerificationError as exc:
         console.print(f"[red]Verification setup failed:[/red] {exc}")

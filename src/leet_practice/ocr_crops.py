@@ -68,6 +68,10 @@ def elapsed_seconds(start: float) -> float:
     return round(time.perf_counter() - start, 6)
 
 
+def progress(message: str) -> None:
+    print(message, flush=True)
+
+
 @dataclass(frozen=True)
 class RawBlock:
     sequence_index: int
@@ -1331,7 +1335,7 @@ def prepare_page_column_blocks(args: argparse.Namespace, run_dir: Path) -> list[
     pages = parse_pages(args.pages)
     raw_blocks: list[RawBlock] = []
     for page in pages:
-        print(f"Rendering page {page}...")
+        progress(f"Rendering page {page}...")
         page_image = render_pdf_page_cached(args.pdf, page, args.dpi, run_dir, args)
         for raw_block in crop_page_columns(page_image, run_dir, page, args):
             raw_blocks.append(
@@ -1365,9 +1369,10 @@ def _run_ocr_for_blocks_individually(
     ocr_blocks: list[OcrBlock] = []
     ocr_errors: list[dict[str, Any]] = []
     interrupted = False
-    for raw_block in raw_blocks:
+    for index, raw_block in enumerate(raw_blocks, start=1):
         try:
-            print(f"Running PaddleOCR on page {raw_block.page} {raw_block.column}...")
+            block_start = time.perf_counter()
+            progress(f"Running PaddleOCR {index}/{len(raw_blocks)} on page {raw_block.page} {raw_block.column}...")
             raw_rows, error = run_ocr_for_block(raw_block.ocr_input(), args, run_dir)
         except KeyboardInterrupt:
             interrupted = True
@@ -1375,6 +1380,10 @@ def _run_ocr_for_blocks_individually(
         if error:
             ocr_errors.append(_ocr_error(raw_block, error))
         ocr_blocks.append(OcrBlock(raw_block=raw_block, raw_rows=raw_rows, error=error))
+        progress(
+            f"Finished PaddleOCR {index}/{len(raw_blocks)} on page {raw_block.page} {raw_block.column} "
+            f"({elapsed_seconds(block_start):.3f}s, {len(raw_rows)} rows)."
+        )
     return ocr_blocks, ocr_errors, interrupted
 
 
@@ -1386,7 +1395,9 @@ def run_ocr_for_blocks(
     if len(raw_blocks) <= 1:
         return _run_ocr_for_blocks_individually(raw_blocks, args, run_dir)
 
-    print(f"Running PaddleOCR batch on {len(raw_blocks)} page-column blocks...")
+    batch_start = time.perf_counter()
+    progress(f"Running PaddleOCR batch on {len(raw_blocks)} page-column blocks...")
+    progress("PaddleOCR batch is running inside the OCR library; per-block progress appears after the batch returns.")
     try:
         # PaddleOCR batch results are accepted only when the output list preserves
         # input image order. If future return shapes expose source metadata, use
@@ -1394,13 +1405,19 @@ def run_ocr_for_blocks(
         batch_results = run_paddleocr_batch([Path(raw_block.image_path) for raw_block in raw_blocks], args)
         if len(batch_results) != len(raw_blocks):
             raise ValueError("Batch OCR result count did not match input block count")
+        progress(
+            f"PaddleOCR batch returned {len(batch_results)} results in {elapsed_seconds(batch_start):.3f}s; "
+            "writing per-column OCR artifacts..."
+        )
         ocr_blocks: list[OcrBlock] = []
-        for raw_block, (_, payload) in zip(raw_blocks, batch_results, strict=True):
+        for index, (raw_block, (_, payload)) in enumerate(zip(raw_blocks, batch_results, strict=True), start=1):
+            progress(f"Writing OCR artifacts {index}/{len(raw_blocks)} for page {raw_block.page} {raw_block.column}...")
             raw_rows = write_ocr_block_artifacts(raw_block.ocr_input(), payload, args, run_dir)
             ocr_blocks.append(OcrBlock(raw_block=raw_block, raw_rows=raw_rows))
+        progress(f"Finished OCR artifact writing for {len(ocr_blocks)} page-column blocks.")
         return ocr_blocks, [], False
     except Exception as exc:  # noqa: BLE001 - unsupported batch OCR should preserve current behavior.
-        print(f"Batch OCR unavailable; falling back to per-block OCR: {exc}")
+        progress(f"Batch OCR unavailable; falling back to per-block OCR: {exc}")
         return _run_ocr_for_blocks_individually(raw_blocks, args, run_dir)
 
 
@@ -1448,6 +1465,7 @@ def build_suggestions_payload(
     blocks_by_id = {block.block_id: block for block in blocks}
 
     anchor_start = time.perf_counter()
+    progress("Detecting set headers and question anchors...")
     set_header_candidates, selected_set_headers = detect_set_header_candidates(rows, blocks_by_id, args.min_anchor_score)
     anchor_candidates, selected_anchors = detect_anchor_candidates(
         rows,
@@ -1456,8 +1474,13 @@ def build_suggestions_payload(
         args.allow_weak_question_anchors,
     )
     payload_timings["anchor_detection_seconds"] = elapsed_seconds(anchor_start)
+    progress(
+        f"Detected {len(selected_set_headers)} selected set headers and {len(selected_anchors)} selected question anchors "
+        f"({payload_timings['anchor_detection_seconds']:.3f}s)."
+    )
 
     candidate_crop_start = time.perf_counter()
+    progress("Writing candidate crop parts and stitched preview images...")
     suggestions = save_candidate_crops(
         run_dir=run_dir,
         blocks=blocks,
@@ -1468,14 +1491,21 @@ def build_suggestions_payload(
         keep_crop_part_images=args.keep_crop_part_images,
     )
     payload_timings["candidate_crops_seconds"] = elapsed_seconds(candidate_crop_start)
+    progress(f"Wrote {len(suggestions)} candidate suggestions ({payload_timings['candidate_crops_seconds']:.3f}s).")
 
     annotated_start = time.perf_counter()
+    if args.no_annotated_blocks:
+        progress("Skipping annotated block images.")
+    else:
+        progress("Writing annotated block images...")
     annotated_paths = (
         []
         if args.no_annotated_blocks
         else save_annotated_blocks(run_dir, blocks, rows, selected_anchors, selected_set_headers)
     )
     payload_timings["annotated_blocks_seconds"] = elapsed_seconds(annotated_start)
+    if annotated_paths:
+        progress(f"Wrote {len(annotated_paths)} annotated block images ({payload_timings['annotated_blocks_seconds']:.3f}s).")
     payload_timings["build_suggestions_payload_seconds"] = elapsed_seconds(payload_start)
 
     return {
@@ -1544,19 +1574,26 @@ def build_stream(args: argparse.Namespace, run_dir: Path) -> dict[str, Any]:
         prepare_start = time.perf_counter()
         raw_blocks = prepare_page_column_blocks(args, run_dir)
         timings["prepare_page_column_blocks_seconds"] = elapsed_seconds(prepare_start)
+        progress(f"Prepared {len(raw_blocks)} page-column blocks ({timings['prepare_page_column_blocks_seconds']:.3f}s).")
         ocr_start = time.perf_counter()
         ocr_blocks, ocr_errors, ocr_interrupted = run_ocr_for_blocks(raw_blocks, args, run_dir)
         timings["ocr_seconds"] = elapsed_seconds(ocr_start)
+        progress(f"OCR stage finished for {len(ocr_blocks)}/{len(raw_blocks)} blocks ({timings['ocr_seconds']:.3f}s).")
         interrupted = ocr_interrupted or len(ocr_blocks) < len(raw_blocks)
         if interrupted:
-            print("\nInterrupted; writing partial suggestions for completed OCR blocks...")
+            progress("\nInterrupted; writing partial suggestions for completed OCR blocks...")
     except KeyboardInterrupt:
         interrupted = True
-        print("\nInterrupted; writing partial suggestions for completed OCR blocks...")
+        progress("\nInterrupted; writing partial suggestions for completed OCR blocks...")
 
     stream_start = time.perf_counter()
+    progress("Building OCR reading stream...")
     blocks, rows = build_stream_from_ocr_blocks(ocr_blocks, args)
     timings["build_stream_from_ocr_blocks_seconds"] = elapsed_seconds(stream_start)
+    progress(
+        f"Built OCR reading stream with {len(rows)} rows from {len(blocks)} blocks "
+        f"({timings['build_stream_from_ocr_blocks_seconds']:.3f}s)."
+    )
     payload = build_suggestions_payload(
         args,
         run_dir,
