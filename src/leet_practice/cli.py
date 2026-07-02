@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from ipaddress import ip_address
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from rich.console import Console
 
 from leet_practice import __version__
 from leet_practice import ocr_crops
+from leet_practice.ocr_benchmark import benchmark_record, write_benchmark_summary
 from leet_practice.verification import (
     VerificationError,
     initialize_review_state,
@@ -108,8 +110,13 @@ def _run_ocr(
     data_root: Path,
     out_dir: Path,
     run_id: str | None,
+    dpi: int,
+    reuse_existing_images: bool,
+    no_annotated_blocks: bool,
+    ocr_batch_chunk_size: int,
     paddle_device: str | None,
     paddle_text_recognition_batch_size: int | None,
+    paddle_text_det_limit_side_len: int | None,
     paddle_preimport_paddle: bool,
 ) -> None:
     pdf_path = pdf or _default_pdf_path(exam_id, data_root)
@@ -135,11 +142,21 @@ def _run_ocr(
         str(out_dir),
         "--run-id",
         actual_run_id,
+        "--dpi",
+        str(dpi),
+        "--ocr-batch-chunk-size",
+        str(ocr_batch_chunk_size),
     ]
+    if reuse_existing_images:
+        argv.append("--reuse-existing-images")
+    if no_annotated_blocks:
+        argv.append("--no-annotated-blocks")
     if paddle_device:
         argv.extend(["--paddle-device", paddle_device])
     if paddle_text_recognition_batch_size is not None:
         argv.extend(["--paddle-text-recognition-batch-size", str(paddle_text_recognition_batch_size)])
+    if paddle_text_det_limit_side_len is not None:
+        argv.extend(["--paddle-text-det-limit-side-len", str(paddle_text_det_limit_side_len)])
     if paddle_preimport_paddle:
         argv.append("--paddle-preimport-paddle")
 
@@ -160,11 +177,25 @@ def ocr_command(
     data_root: Path = typer.Option(DEFAULT_DATA_ROOT, "--data-root", help="Local data root used for the default PDF path."),
     out_dir: Path = typer.Option(DEFAULT_ARTIFACTS_ROOT, "--out-dir", help="Directory where candidate suggestions are written."),
     run_id: str | None = typer.Option(None, "--run-id", help="Output run directory name. Defaults to EXAM_ID plus page range."),
+    dpi: int = typer.Option(300, "--dpi", min=1, help="PDF render DPI."),
+    reuse_existing_images: bool = typer.Option(
+        False,
+        "--reuse-existing-images",
+        help="Reuse rendered page and column PNGs already present in the run directory.",
+    ),
+    no_annotated_blocks: bool = typer.Option(False, "--no-annotated-blocks", help="Skip annotated page-column images."),
+    ocr_batch_chunk_size: int = typer.Option(4, "--ocr-batch-chunk-size", min=1, help="Page-column blocks per OCR batch chunk."),
     paddle_device: str | None = typer.Option(None, "--paddle-device", help="Optional PaddleOCR device, for example cpu or gpu:0."),
     paddle_text_recognition_batch_size: int | None = typer.Option(
         None,
         "--paddle-text-recognition-batch-size",
         help="Optional PaddleOCR text-recognition batch size.",
+    ),
+    paddle_text_det_limit_side_len: int | None = typer.Option(
+        None,
+        "--paddle-text-det-limit-side-len",
+        min=1,
+        help="Optional PaddleOCR text detection max side length.",
     ),
     paddle_preimport_paddle: bool = typer.Option(
         False,
@@ -181,10 +212,51 @@ def ocr_command(
         data_root=data_root,
         out_dir=out_dir,
         run_id=run_id,
+        dpi=dpi,
+        reuse_existing_images=reuse_existing_images,
+        no_annotated_blocks=no_annotated_blocks,
+        ocr_batch_chunk_size=ocr_batch_chunk_size,
         paddle_device=paddle_device,
         paddle_text_recognition_batch_size=paddle_text_recognition_batch_size,
+        paddle_text_det_limit_side_len=paddle_text_det_limit_side_len,
         paddle_preimport_paddle=paddle_preimport_paddle,
     )
+
+
+@app.command("ocr-benchmark-summary")
+def ocr_benchmark_summary_command(
+    baseline: Path = typer.Argument(..., exists=True, help="Baseline suggestions.json path."),
+    candidate: list[Path] = typer.Option(
+        [],
+        "--candidate",
+        exists=True,
+        help="Candidate suggestions.json path. Repeat for multiple candidates.",
+    ),
+    baseline_kind: str = typer.Option("cold", "--baseline-kind", help="Run kind label for the baseline, for example cold or warm."),
+    candidate_kind: str = typer.Option("warm", "--candidate-kind", help="Run kind label for candidates, for example warm."),
+    out_dir: Path = typer.Option(
+        Path("artifacts/ocr_benchmarks"),
+        "--out-dir",
+        help="Directory where summary.json and summary.csv are written.",
+    ),
+) -> None:
+    """Summarize OCR benchmark results from suggestion artifacts."""
+
+    baseline_payload = json.loads(baseline.read_text(encoding="utf-8"))
+    records = [benchmark_record(name=baseline.parent.name, run_kind=baseline_kind, payload=baseline_payload)]
+    for path in candidate:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        records.append(
+            benchmark_record(
+                name=path.parent.name,
+                run_kind=candidate_kind,
+                payload=payload,
+                baseline_payload=baseline_payload,
+            )
+        )
+    json_path, csv_path = write_benchmark_summary(records, out_dir)
+    console.print(f"Benchmark summary: {json_path}")
+    console.print(f"Benchmark CSV: {csv_path}")
 
 
 def _run_review_crops(

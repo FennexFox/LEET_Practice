@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -165,6 +166,99 @@ def test_ocr_invalid_pages_fails_before_creating_run_dir(tmp_path: Path) -> None
     assert result.exit_code == 1
     assert "Invalid PAGES" in result.output
     assert not (out_dir / "should-not-exist").exists()
+
+
+def test_ocr_forwards_optimization_options(tmp_path: Path, monkeypatch) -> None:
+    pdf_path = tmp_path / "data" / "raw_pdfs" / "leet-2026-verbal-even.pdf"
+    pdf_path.parent.mkdir(parents=True)
+    pdf_path.write_bytes(b"%PDF")
+    captured: dict[str, object] = {}
+
+    def fake_build_stream(args, run_dir):
+        captured["args"] = args
+        captured["run_dir"] = run_dir
+        return {
+            "interrupted": False,
+            "processed_pages": [],
+            "blocks": [],
+            "rows": [],
+            "set_header_candidates": [],
+            "selected_set_headers": [],
+            "anchor_candidates": [],
+            "selected_anchors": [],
+            "suggestions": [],
+            "ocr_errors": [],
+        }
+
+    monkeypatch.setattr(cli.ocr_crops, "build_stream", fake_build_stream)
+    monkeypatch.setattr(cli.ocr_crops, "write_suggestions", lambda *_: None)
+    monkeypatch.setattr(cli.ocr_crops, "print_summary", lambda *_: None)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "ocr",
+            "leet-2026-verbal-even",
+            "1",
+            "--data-root",
+            str(tmp_path / "data"),
+            "--dpi",
+            "240",
+            "--reuse-existing-images",
+            "--no-annotated-blocks",
+            "--ocr-batch-chunk-size",
+            "8",
+            "--paddle-text-recognition-batch-size",
+            "64",
+            "--paddle-text-det-limit-side-len",
+            "3584",
+        ],
+    )
+
+    assert result.exit_code == 0
+    args = captured["args"]
+    assert args.dpi == 240
+    assert args.reuse_existing_images is True
+    assert args.no_annotated_blocks is True
+    assert args.ocr_batch_chunk_size == 8
+    assert args.paddle_text_recognition_batch_size == 64
+    assert args.paddle_text_det_limit_side_len == 3584
+
+
+def test_ocr_benchmark_summary_writes_summary_files(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline" / "suggestions.json"
+    candidate = tmp_path / "candidate" / "suggestions.json"
+    for path in (baseline, candidate):
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            '{"processed_pages":[1],"ocr_errors":[],"rows":[{"page":1,"text":"1. A"}],'
+            '"selected_anchors":[{"question_number":1,"text":"1. A","page":1,"column":"left","stream_y_start":1}],'
+            '"suggestions":[{}],"timings":{"ocr_seconds":1,"total_seconds":2},"options":{}}',
+            encoding="utf-8",
+        )
+    out_dir = tmp_path / "summary"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "ocr-benchmark-summary",
+            str(baseline),
+            "--candidate",
+            str(candidate),
+            "--baseline-kind",
+            "cold",
+            "--candidate-kind",
+            "warm",
+            "--out-dir",
+            str(out_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert (out_dir / "summary.json").exists()
+    assert (out_dir / "summary.csv").exists()
+    payload = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
+    assert [record["run_kind"] for record in payload["records"]] == ["cold", "warm"]
 
 
 def test_verify_enables_local_nlp_cleanup_by_default(tmp_path: Path, suggestion_run: Path, monkeypatch) -> None:

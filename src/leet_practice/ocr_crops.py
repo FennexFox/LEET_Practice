@@ -27,6 +27,7 @@ from typing import Any, Callable
 
 from leet_practice.compare_ocr_engines import (
     extract_paddle_rows,
+    paddle_option_metadata,
     render_pdf_page,
     run_paddleocr,
     run_paddleocr_batch,
@@ -111,7 +112,7 @@ def run_paddleocr_batch_with_progress(
     batch_start: float,
 ) -> tuple[list[tuple[str, dict[str, Any]]], bool]:
     image_paths = [Path(raw_block.image_path) for raw_block in raw_blocks]
-    chunk_size = max(1, OCR_BATCH_PROGRESS_CHUNK_SIZE)
+    chunk_size = max(1, int(getattr(args, "ocr_batch_chunk_size", OCR_BATCH_PROGRESS_CHUNK_SIZE)))
     chunk_count = (len(image_paths) + chunk_size - 1) // chunk_size
     batch_results: list[tuple[str, dict[str, Any]]] = []
     for chunk_index, offset in enumerate(range(0, len(image_paths), chunk_size), start=1):
@@ -348,6 +349,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Text recognition batch size passed to PaddleOCR when the installed version supports it.",
+    )
+    parser.add_argument(
+        "--paddle-text-det-limit-side-len",
+        type=int,
+        default=None,
+        help="Text detection max side length passed to PaddleOCR when the installed version supports it.",
+    )
+    parser.add_argument(
+        "--ocr-batch-chunk-size",
+        type=int,
+        default=OCR_BATCH_PROGRESS_CHUNK_SIZE,
+        help=f"Page-column block count per PaddleOCR batch chunk. Default: {OCR_BATCH_PROGRESS_CHUNK_SIZE}.",
     )
     parser.add_argument(
         "--paddle-disable-mkldnn",
@@ -624,6 +637,7 @@ def write_ocr_block_artifacts(
             "paddle_cpu_threads": args.paddle_cpu_threads,
             "paddle_disable_mkldnn": args.paddle_disable_mkldnn,
             "paddle_text_recognition_batch_size": args.paddle_text_recognition_batch_size,
+            "paddle_text_det_limit_side_len": args.paddle_text_det_limit_side_len,
             "paddle_disable_pir": args.paddle_disable_pir,
             "paddle_disable_doc_preprocess": args.paddle_disable_doc_preprocess,
             "include_raw_paddle_payload": args.include_raw_paddle_payload,
@@ -1497,7 +1511,7 @@ def run_ocr_for_blocks(
         return _run_ocr_for_blocks_individually(raw_blocks, args, run_dir)
 
     batch_start = time.perf_counter()
-    chunk_size = max(1, OCR_BATCH_PROGRESS_CHUNK_SIZE)
+    chunk_size = max(1, int(getattr(args, "ocr_batch_chunk_size", OCR_BATCH_PROGRESS_CHUNK_SIZE)))
     chunk_count = (len(raw_blocks) + chunk_size - 1) // chunk_size
     progress(f"Running PaddleOCR batch on {len(raw_blocks)} page-column blocks in {chunk_count} chunks...")
     progress("PaddleOCR batch is running inside the OCR library; heartbeat appears while each chunk is active.")
@@ -1642,6 +1656,7 @@ def build_suggestions_payload(
     if annotated_paths:
         progress(f"Wrote {len(annotated_paths)} annotated block images ({payload_timings['annotated_blocks_seconds']:.3f}s).")
     payload_timings["build_suggestions_payload_seconds"] = elapsed_seconds(payload_start)
+    paddle_metadata = paddle_option_metadata(args)
 
     return {
         "artifact_type": "candidate_question_crop_suggestions",
@@ -1666,15 +1681,27 @@ def build_suggestions_payload(
             "allow_weak_question_anchors": args.allow_weak_question_anchors,
             "include_raw_paddle_payload": args.include_raw_paddle_payload,
             "reuse_existing_images": args.reuse_existing_images,
+            "no_annotated_blocks": args.no_annotated_blocks,
+            "ocr_batch_chunk_size": args.ocr_batch_chunk_size,
             "paddle_lang": args.paddle_lang,
             "paddle_device": args.paddle_device,
             "paddle_cpu_threads": args.paddle_cpu_threads,
             "paddle_disable_mkldnn": args.paddle_disable_mkldnn,
             "paddle_text_recognition_batch_size": args.paddle_text_recognition_batch_size,
+            "paddle_text_det_limit_side_len": args.paddle_text_det_limit_side_len,
             "paddle_disable_pir": args.paddle_disable_pir,
             "paddle_disable_doc_preprocess": args.paddle_disable_doc_preprocess,
             "paddle_preimport_torch": args.paddle_preimport_torch,
             "paddle_preimport_paddle": args.paddle_preimport_paddle,
+            "requested_options": {
+                **paddle_metadata["requested_options"],
+                "ocr_batch_chunk_size": args.ocr_batch_chunk_size,
+            },
+            "effective_options": {
+                **paddle_metadata["effective_options"],
+                "ocr_batch_chunk_size": args.ocr_batch_chunk_size,
+            },
+            "option_support": paddle_metadata["option_support"],
         },
         "model": {
             "reading_order": "page-left, page-right, next-page-left, next-page-right",

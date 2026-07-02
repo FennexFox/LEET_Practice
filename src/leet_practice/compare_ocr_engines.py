@@ -110,6 +110,12 @@ def parse_args() -> argparse.Namespace:
         help="Text recognition batch size passed to PaddleOCR when the installed version supports it.",
     )
     parser.add_argument(
+        "--paddle-text-det-limit-side-len",
+        type=int,
+        default=None,
+        help="Text detection max side length passed to PaddleOCR when the installed version supports it.",
+    )
+    parser.add_argument(
         "--paddle-disable-mkldnn",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -276,6 +282,65 @@ def configure_paddle_runtime(args: argparse.Namespace) -> dict[str, str]:
 _PADDLE_OCR_CACHE: dict[tuple[Any, ...], Any] = {}
 
 
+def paddleocr_option_support(constructor_params: Any) -> dict[str, bool]:
+    return {
+        "paddle_device": "device" in constructor_params,
+        "paddle_cpu_threads": "cpu_threads" in constructor_params,
+        "paddle_text_recognition_batch_size": (
+            "text_recognition_batch_size" in constructor_params or "rec_batch_num" in constructor_params
+        ),
+        "paddle_text_det_limit_side_len": "text_det_limit_side_len" in constructor_params,
+    }
+
+
+def requested_paddle_options(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "paddle_lang": str(args.paddle_lang),
+        "paddle_device": args.paddle_device,
+        "paddle_cpu_threads": args.paddle_cpu_threads,
+        "paddle_text_recognition_batch_size": getattr(args, "paddle_text_recognition_batch_size", None),
+        "paddle_text_det_limit_side_len": getattr(args, "paddle_text_det_limit_side_len", None),
+        "paddle_disable_mkldnn": args.paddle_disable_mkldnn,
+        "paddle_disable_pir": args.paddle_disable_pir,
+        "paddle_disable_doc_preprocess": args.paddle_disable_doc_preprocess,
+        "paddle_preimport_torch": args.paddle_preimport_torch,
+        "paddle_preimport_paddle": args.paddle_preimport_paddle,
+    }
+
+
+def resolve_paddle_options(args: argparse.Namespace, constructor_params: Any) -> tuple[dict[str, Any], dict[str, bool]]:
+    support = paddleocr_option_support(constructor_params)
+    requested = requested_paddle_options(args)
+    effective = dict(requested)
+    effective["paddle_device"] = requested["paddle_device"] if support["paddle_device"] else None
+    effective["paddle_cpu_threads"] = requested["paddle_cpu_threads"] if support["paddle_cpu_threads"] else None
+    effective["paddle_text_recognition_batch_size"] = (
+        requested["paddle_text_recognition_batch_size"] if support["paddle_text_recognition_batch_size"] else None
+    )
+    effective["paddle_text_det_limit_side_len"] = (
+        requested["paddle_text_det_limit_side_len"] if support["paddle_text_det_limit_side_len"] else None
+    )
+    return effective, support
+
+
+def paddle_option_metadata(args: argparse.Namespace) -> dict[str, Any]:
+    try:
+        from paddleocr import PaddleOCR
+    except ImportError:
+        return {
+            "requested_options": requested_paddle_options(args),
+            "effective_options": requested_paddle_options(args),
+            "option_support": {},
+        }
+    constructor_params = inspect.signature(PaddleOCR).parameters
+    effective_options, option_support = resolve_paddle_options(args, constructor_params)
+    return {
+        "requested_options": requested_paddle_options(args),
+        "effective_options": effective_options,
+        "option_support": option_support,
+    }
+
+
 def build_paddleocr(args: argparse.Namespace) -> Any:
     configure_paddle_runtime(args)
 
@@ -305,15 +370,16 @@ def build_paddleocr(args: argparse.Namespace) -> Any:
         raise RuntimeError("paddleocr is required. Run: uv sync --extra ocr") from exc
 
     constructor_params = inspect.signature(PaddleOCR).parameters
+    effective_options, _ = resolve_paddle_options(args, constructor_params)
     kwargs: dict[str, Any] = {"lang": str(args.paddle_lang)}
 
     # PaddleOCR constructor arguments differ across releases. Only pass an option
     # when the installed version advertises it.
-    if args.paddle_device and "device" in constructor_params:
-        kwargs["device"] = args.paddle_device
+    if effective_options["paddle_device"] and "device" in constructor_params:
+        kwargs["device"] = effective_options["paddle_device"]
     if "cpu_threads" in constructor_params:
-        kwargs["cpu_threads"] = args.paddle_cpu_threads
-    text_recognition_batch_size = getattr(args, "paddle_text_recognition_batch_size", None)
+        kwargs["cpu_threads"] = effective_options["paddle_cpu_threads"]
+    text_recognition_batch_size = effective_options["paddle_text_recognition_batch_size"]
     if text_recognition_batch_size is not None:
         if text_recognition_batch_size <= 0:
             raise ValueError("--paddle-text-recognition-batch-size must be positive.")
@@ -321,6 +387,11 @@ def build_paddleocr(args: argparse.Namespace) -> Any:
             kwargs["text_recognition_batch_size"] = text_recognition_batch_size
         elif "rec_batch_num" in constructor_params:
             kwargs["rec_batch_num"] = text_recognition_batch_size
+    text_det_limit_side_len = effective_options["paddle_text_det_limit_side_len"]
+    if text_det_limit_side_len is not None:
+        if text_det_limit_side_len <= 0:
+            raise ValueError("--paddle-text-det-limit-side-len must be positive.")
+        kwargs["text_det_limit_side_len"] = text_det_limit_side_len
     if args.paddle_disable_mkldnn and "enable_mkldnn" in constructor_params:
         kwargs["enable_mkldnn"] = False
     if args.paddle_disable_doc_preprocess:
@@ -342,6 +413,7 @@ def get_paddleocr(args: argparse.Namespace) -> Any:
         args.paddle_device,
         args.paddle_cpu_threads,
         getattr(args, "paddle_text_recognition_batch_size", None),
+        getattr(args, "paddle_text_det_limit_side_len", None),
         args.paddle_disable_mkldnn,
         args.paddle_disable_pir,
         args.paddle_disable_doc_preprocess,
@@ -566,6 +638,7 @@ def write_manifest(run_dir: Path, args: argparse.Namespace, image_tasks: list[Im
             "paddle_device": args.paddle_device,
             "paddle_cpu_threads": args.paddle_cpu_threads,
             "paddle_text_recognition_batch_size": args.paddle_text_recognition_batch_size,
+            "paddle_text_det_limit_side_len": args.paddle_text_det_limit_side_len,
             "paddle_disable_mkldnn": args.paddle_disable_mkldnn,
             "paddle_disable_pir": args.paddle_disable_pir,
             "paddle_disable_doc_preprocess": args.paddle_disable_doc_preprocess,
