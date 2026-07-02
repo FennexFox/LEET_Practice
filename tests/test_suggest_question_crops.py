@@ -64,6 +64,30 @@ def test_run_with_heartbeat_reports_long_running_action(monkeypatch) -> None:
     assert any("Test operation still running" in message for message in messages)
 
 
+def test_run_with_heartbeat_preserves_explicit_zero_start(monkeypatch) -> None:
+    module = _load_suggest_question_crops()
+    messages: list[str] = []
+
+    monkeypatch.setattr(module.time, "perf_counter", lambda: 123.0)
+    monkeypatch.setitem(module.run_with_heartbeat.__globals__, "progress", messages.append)
+
+    def action() -> str:
+        deadline = time.monotonic() + 1
+        while not messages and time.monotonic() < deadline:
+            time.sleep(0.001)
+        return "done"
+
+    result = module.run_with_heartbeat(
+        "Test operation",
+        action,
+        start=0.0,
+        interval_seconds=0.01,
+    )
+
+    assert result == "done"
+    assert any("(123s elapsed)" in message for message in messages)
+
+
 def _ocr_args(**overrides):
     defaults = {
         "paddle_lang": "korean",
@@ -211,6 +235,88 @@ def test_run_ocr_for_blocks_batches_in_progress_chunks(tmp_path: Path, monkeypat
         "page_003_left",
         "page_004_left",
         "page_005_left",
+    ]
+
+
+def test_run_ocr_for_blocks_falls_back_only_for_remaining_chunk_after_batch_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _load_suggest_question_crops()
+    raw_blocks = [_raw_block(module, index, index + 1, "left", tmp_path) for index in range(5)]
+    batch_calls: list[list[str]] = []
+    single_calls: list[str] = []
+
+    def fake_batch(image_paths, args):
+        batch_calls.append([path.name for path in image_paths])
+        if len(batch_calls) == 2:
+            raise ValueError("chunk failed")
+        return [
+            ("", {"language": "korean", "runtime_flags": {}, "rows": [{"text": path.stem, "confidence": 0.9}]})
+            for path in image_paths
+        ]
+
+    def fake_single(block, args, run_dir):
+        single_calls.append(Path(block["image_path"]).name)
+        return ([{"text": Path(block["image_path"]).stem, "confidence": 1.0}], None)
+
+    monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "OCR_BATCH_PROGRESS_CHUNK_SIZE", 2)
+    monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "run_paddleocr_batch", fake_batch)
+    monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "run_ocr_for_block", fake_single)
+
+    ocr_blocks, errors, interrupted = module.run_ocr_for_blocks(raw_blocks, _ocr_args(), tmp_path)
+
+    assert errors == []
+    assert interrupted is False
+    assert batch_calls == [
+        ["page_001_left.png", "page_002_left.png"],
+        ["page_003_left.png", "page_004_left.png"],
+    ]
+    assert single_calls == [
+        "page_003_left.png",
+        "page_004_left.png",
+        "page_005_left.png",
+    ]
+    assert [block.raw_rows[0]["text"] for block in ocr_blocks] == [
+        "page_001_left",
+        "page_002_left",
+        "page_003_left",
+        "page_004_left",
+        "page_005_left",
+    ]
+
+
+def test_run_ocr_for_blocks_preserves_completed_batch_chunks_after_keyboard_interrupt(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _load_suggest_question_crops()
+    raw_blocks = [_raw_block(module, index, index + 1, "left", tmp_path) for index in range(5)]
+    batch_calls: list[list[str]] = []
+
+    def fake_batch(image_paths, args):
+        batch_calls.append([path.name for path in image_paths])
+        if len(batch_calls) == 2:
+            raise KeyboardInterrupt
+        return [
+            ("", {"language": "korean", "runtime_flags": {}, "rows": [{"text": path.stem, "confidence": 0.9}]})
+            for path in image_paths
+        ]
+
+    monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "OCR_BATCH_PROGRESS_CHUNK_SIZE", 2)
+    monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "run_paddleocr_batch", fake_batch)
+
+    ocr_blocks, errors, interrupted = module.run_ocr_for_blocks(raw_blocks, _ocr_args(), tmp_path)
+
+    assert errors == []
+    assert interrupted is True
+    assert batch_calls == [
+        ["page_001_left.png", "page_002_left.png"],
+        ["page_003_left.png", "page_004_left.png"],
+    ]
+    assert [block.raw_rows[0]["text"] for block in ocr_blocks] == [
+        "page_001_left",
+        "page_002_left",
     ]
 
 

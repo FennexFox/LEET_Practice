@@ -82,7 +82,7 @@ def run_with_heartbeat(
     start: float | None = None,
     interval_seconds: float = OCR_BATCH_HEARTBEAT_SECONDS,
 ) -> Any:
-    started = start or time.perf_counter()
+    started = time.perf_counter() if start is None else start
     stop_event = threading.Event()
 
     def heartbeat() -> None:
@@ -98,12 +98,18 @@ def run_with_heartbeat(
         thread.join(timeout=0.1)
 
 
+class BatchOcrPartialFailure(Exception):
+    def __init__(self, message: str, completed_results: list[tuple[str, dict[str, Any]]]) -> None:
+        super().__init__(message)
+        self.completed_results = completed_results
+
+
 def run_paddleocr_batch_with_progress(
     raw_blocks: list[RawBlock],
     args: argparse.Namespace,
     *,
     batch_start: float,
-) -> list[tuple[str, dict[str, Any]]]:
+) -> tuple[list[tuple[str, dict[str, Any]]], bool]:
     image_paths = [Path(raw_block.image_path) for raw_block in raw_blocks]
     chunk_size = max(1, OCR_BATCH_PROGRESS_CHUNK_SIZE)
     chunk_count = (len(image_paths) + chunk_size - 1) // chunk_size
@@ -115,17 +121,34 @@ def run_paddleocr_batch_with_progress(
             f"Running PaddleOCR batch chunk {chunk_index}/{chunk_count} "
             f"({len(chunk_paths)} page-column blocks)..."
         )
-        chunk_results = run_with_heartbeat(
-            f"PaddleOCR batch chunk {chunk_index}/{chunk_count}",
-            lambda paths=chunk_paths: run_paddleocr_batch(paths, args),
-            start=chunk_start,
-        )
+        try:
+            chunk_results = run_with_heartbeat(
+                f"PaddleOCR batch chunk {chunk_index}/{chunk_count}",
+                lambda paths=chunk_paths: run_paddleocr_batch(paths, args),
+                start=chunk_start,
+            )
+        except KeyboardInterrupt:
+            progress(
+                f"Interrupted PaddleOCR batch chunk {chunk_index}/{chunk_count}; "
+                f"preserving {len(batch_results)} completed result(s)."
+            )
+            return batch_results, True
+        except Exception as exc:
+            raise BatchOcrPartialFailure(
+                f"Batch OCR chunk {chunk_index}/{chunk_count} failed: {exc}",
+                batch_results,
+            ) from exc
+        if len(chunk_results) != len(chunk_paths):
+            raise BatchOcrPartialFailure(
+                f"Batch OCR chunk {chunk_index}/{chunk_count} result count did not match input block count",
+                batch_results,
+            )
         progress(
             f"Finished PaddleOCR batch chunk {chunk_index}/{chunk_count} "
             f"({elapsed_seconds(chunk_start):.3f}s, total {elapsed_seconds(batch_start):.3f}s)."
         )
         batch_results.extend(chunk_results)
-    return batch_results
+    return batch_results, False
 
 
 @dataclass(frozen=True)
@@ -1443,6 +1466,28 @@ def _run_ocr_for_blocks_individually(
     return ocr_blocks, ocr_errors, interrupted
 
 
+def _write_batch_ocr_artifacts(
+    raw_blocks: list[RawBlock],
+    batch_results: list[tuple[str, dict[str, Any]]],
+    args: argparse.Namespace,
+    run_dir: Path,
+    *,
+    total_count: int,
+) -> tuple[list[OcrBlock], bool]:
+    ocr_blocks: list[OcrBlock] = []
+    for index, (raw_block, (_, payload)) in enumerate(zip(raw_blocks, batch_results, strict=True), start=1):
+        try:
+            progress(f"Writing OCR artifacts {index}/{total_count} for page {raw_block.page} {raw_block.column}...")
+            raw_rows = write_ocr_block_artifacts(raw_block.ocr_input(), payload, args, run_dir)
+        except KeyboardInterrupt:
+            progress(
+                f"Interrupted while writing OCR artifacts; preserving {len(ocr_blocks)} completed block(s)."
+            )
+            return ocr_blocks, True
+        ocr_blocks.append(OcrBlock(raw_block=raw_block, raw_rows=raw_rows))
+    return ocr_blocks, False
+
+
 def run_ocr_for_blocks(
     raw_blocks: list[RawBlock],
     args: argparse.Namespace,
@@ -1460,20 +1505,52 @@ def run_ocr_for_blocks(
         # PaddleOCR batch results are accepted only when the output list preserves
         # input image order. If future return shapes expose source metadata, use
         # it here to validate the mapping before writing per-column artifacts.
-        batch_results = run_paddleocr_batch_with_progress(raw_blocks, args, batch_start=batch_start)
-        if len(batch_results) != len(raw_blocks):
-            raise ValueError("Batch OCR result count did not match input block count")
+        batch_results, batch_interrupted = run_paddleocr_batch_with_progress(raw_blocks, args, batch_start=batch_start)
         progress(
-            f"PaddleOCR batch returned {len(batch_results)} results in {elapsed_seconds(batch_start):.3f}s; "
+            f"PaddleOCR batch returned {len(batch_results)}/{len(raw_blocks)} results "
+            f"in {elapsed_seconds(batch_start):.3f}s; "
             "writing per-column OCR artifacts..."
         )
-        ocr_blocks: list[OcrBlock] = []
-        for index, (raw_block, (_, payload)) in enumerate(zip(raw_blocks, batch_results, strict=True), start=1):
-            progress(f"Writing OCR artifacts {index}/{len(raw_blocks)} for page {raw_block.page} {raw_block.column}...")
-            raw_rows = write_ocr_block_artifacts(raw_block.ocr_input(), payload, args, run_dir)
-            ocr_blocks.append(OcrBlock(raw_block=raw_block, raw_rows=raw_rows))
+        ocr_blocks, write_interrupted = _write_batch_ocr_artifacts(
+            raw_blocks[: len(batch_results)],
+            batch_results,
+            args,
+            run_dir,
+            total_count=len(raw_blocks),
+        )
+        if batch_interrupted or write_interrupted:
+            progress(f"Finished partial OCR artifact writing for {len(ocr_blocks)} page-column blocks.")
+            return ocr_blocks, [], True
         progress(f"Finished OCR artifact writing for {len(ocr_blocks)} page-column blocks.")
         return ocr_blocks, [], False
+    except BatchOcrPartialFailure as exc:
+        batch_results = exc.completed_results
+        if not batch_results:
+            progress(f"Batch OCR unavailable; falling back to per-block OCR: {exc}")
+            return _run_ocr_for_blocks_individually(raw_blocks, args, run_dir)
+        completed_raw_blocks = raw_blocks[: len(batch_results)]
+        progress(
+            f"Batch OCR failed after {len(batch_results)} completed result(s); "
+            f"writing completed artifacts before falling back: {exc}"
+        )
+        ocr_blocks, write_interrupted = _write_batch_ocr_artifacts(
+            completed_raw_blocks,
+            batch_results,
+            args,
+            run_dir,
+            total_count=len(raw_blocks),
+        )
+        if write_interrupted:
+            progress(f"Finished partial OCR artifact writing for {len(ocr_blocks)} page-column blocks.")
+            return ocr_blocks, [], True
+        remaining_blocks = raw_blocks[len(ocr_blocks) :]
+        progress(f"Falling back to per-block OCR for {len(remaining_blocks)} remaining block(s).")
+        remaining_ocr_blocks, ocr_errors, interrupted = _run_ocr_for_blocks_individually(
+            remaining_blocks,
+            args,
+            run_dir,
+        )
+        return ocr_blocks + remaining_ocr_blocks, ocr_errors, interrupted
     except Exception as exc:  # noqa: BLE001 - unsupported batch OCR should preserve current behavior.
         progress(f"Batch OCR unavailable; falling back to per-block OCR: {exc}")
         return _run_ocr_for_blocks_individually(raw_blocks, args, run_dir)
