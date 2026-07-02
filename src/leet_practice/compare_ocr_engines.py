@@ -327,10 +327,11 @@ def paddle_option_metadata(args: argparse.Namespace) -> dict[str, Any]:
     try:
         from paddleocr import PaddleOCR
     except ImportError:
+        effective_options, option_support = resolve_paddle_options(args, {})
         return {
             "requested_options": requested_paddle_options(args),
-            "effective_options": requested_paddle_options(args),
-            "option_support": {},
+            "effective_options": effective_options,
+            "option_support": option_support,
         }
     constructor_params = inspect.signature(PaddleOCR).parameters
     effective_options, option_support = resolve_paddle_options(args, constructor_params)
