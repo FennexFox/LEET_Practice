@@ -326,8 +326,11 @@ CHOICE_MARKER_TO_INDEX = {
 }
 
 
-def _clean_lines(text: str) -> list[str]:
-    return [line.strip() for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n") if line.strip()]
+def _clean_lines(text: str, *, preserve_blank: bool = False) -> list[str]:
+    lines = [line.strip() for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    if preserve_blank:
+        return lines
+    return [line for line in lines if line]
 
 
 KOREAN_CONTINUATION_EXACT = {
@@ -464,6 +467,9 @@ def _join_question_stem_lines(lines: list[str]) -> str:
     for line in lines:
         stripped = line.strip()
         if not stripped:
+            if current:
+                blocks.append(current)
+                current = []
             continue
         if VIEW_HEADING_RE.fullmatch(stripped):
             if current:
@@ -502,6 +508,25 @@ def _choice_index(marker: str) -> int | None:
 
 def _is_circled_choice_marker(marker: str) -> bool:
     return "\u2460" <= marker <= "\u2464"
+
+
+def _is_reliable_choice_marker(line: str, marker: str, has_choices: bool) -> bool:
+    if _is_circled_choice_marker(marker):
+        return True
+    if len(marker) > 1:
+        return True
+    stripped = line.lstrip()
+    after_marker = stripped[len(marker) :]
+    if after_marker[:1].isspace():
+        return True
+    return has_choices
+
+
+def _normalize_choice_text_ocr(text: str) -> str:
+    stripped = text.strip()
+    if re.fullmatch(r"[Ll]", stripped):
+        return "\u3134"
+    return _normalize_punctuation_spacing(re.sub(r"^7(?=\s*(?:[,，]|$))", "\u3131", stripped))
 
 
 def _build_kiwi(workers: int | None = None) -> tuple[Any | None, str | None]:
@@ -763,7 +788,7 @@ def generate_ocr_draft(
             correction_steps=steps,
         )
 
-    lines = _clean_lines(text)
+    lines = _clean_lines(text, preserve_blank=True)
     if lines:
         lines[0], removed = _remove_leading_question_marker(lines[0], question_number)
         if removed:
@@ -781,6 +806,10 @@ def generate_ocr_draft(
                 stem_lines.append(line)
                 current_choice = None
                 continue
+            if not _is_reliable_choice_marker(line, match.group("marker"), bool(choice_lines)):
+                stem_lines.append(line)
+                current_choice = None
+                continue
             expected_index = 1 if not choice_lines else max(choice_lines) + 1
             if index != expected_index and not (index in choice_lines and _is_circled_choice_marker(match.group("marker"))):
                 if choice_lines and index > expected_index:
@@ -795,13 +824,13 @@ def generate_ocr_draft(
             if index in choice_lines:
                 duplicate_choices.add(index)
             choice_lines.setdefault(index, [])
-            choice_text = match.group("text").strip()
+            choice_text = _normalize_choice_text_ocr(match.group("text"))
             if choice_text:
                 choice_lines[index].append(choice_text)
             current_choice = index
             continue
         if current_choice is not None:
-            choice_lines[current_choice].append(line)
+            choice_lines[current_choice].append(_normalize_choice_text_ocr(line))
         else:
             stem_lines.append(line)
 
@@ -1009,12 +1038,31 @@ def _is_indented_paragraph_start(row: dict[str, Any], body_left: float | None) -
     return left - body_left >= 30
 
 
+def _ends_sentence_like(text: str) -> bool:
+    return bool(re.search(r"[.!?\u3002\uff01\uff1f\"')\]\}]\s*$", text.strip()))
+
+
+def _should_insert_ocr_paragraph_break(
+    row: dict[str, Any],
+    body_left: float | None,
+    candidate_type: CandidateType | None,
+    previous_text: str,
+) -> bool:
+    if not _is_indented_paragraph_start(row, body_left):
+        return False
+    if candidate_type == CandidateType.PASSAGE:
+        return True
+    if candidate_type == CandidateType.QUESTION:
+        return _ends_sentence_like(previous_text)
+    return False
+
+
 def collect_raw_ocr_text(candidate: dict[str, Any], suggestions_dir: Path) -> str:
     """Collect compact OCR text for the rows included in candidate crop parts."""
 
     lines: list[str] = []
     seen: set[tuple[Path, int]] = set()
-    is_passage = _candidate_type(str(candidate.get("kind") or "")) == CandidateType.PASSAGE
+    candidate_type = _candidate_type(str(candidate.get("kind") or ""))
     for part in candidate.get("parts") or []:
         if not isinstance(part, dict):
             continue
@@ -1039,10 +1087,15 @@ def collect_raw_ocr_text(candidate: dict[str, Any], suggestions_dir: Path) -> st
                 continue
             seen.add((ocr_path, row_index))
             part_rows.append(row)
-        body_left = _body_left_for_rows(part_rows) if is_passage else None
+        body_left = _body_left_for_rows(part_rows) if candidate_type in {CandidateType.PASSAGE, CandidateType.QUESTION} else None
         for row in part_rows:
             text = str(row.get("text") or "").strip()
-            if text and is_passage and lines and lines[-1] != "" and _is_indented_paragraph_start(row, body_left):
+            if (
+                text
+                and lines
+                and lines[-1] != ""
+                and _should_insert_ocr_paragraph_break(row, body_left, candidate_type, lines[-1])
+            ):
                 lines.append("")
             lines.append(text)
     return "\n".join(lines)

@@ -156,6 +156,62 @@ def test_passage_prefill_preserves_indented_paragraph_starts_from_ocr_rows(tmp_p
     )
 
 
+def test_question_prefill_preserves_indented_paragraph_starts_from_ocr_rows(tmp_path: Path) -> None:
+    run_dir = tmp_path / "artifacts" / "question_crop_suggestions" / "run"
+    (run_dir / "q01_candidate").mkdir(parents=True)
+    (run_dir / "q01_candidate" / "q01_candidate_preview.png").write_bytes(b"preview")
+    rows = [
+        {"row_index": 0, "text": "1. Which follows?", "local_bbox": [100, 10, 900, 40]},
+        {"row_index": 1, "text": "First paragraph line one", "local_bbox": [140, 60, 900, 90]},
+        {"row_index": 2, "text": "First paragraph line two.", "local_bbox": [100, 110, 900, 140]},
+        {"row_index": 3, "text": "Second paragraph line one", "local_bbox": [140, 160, 900, 190]},
+        {"row_index": 4, "text": "Second paragraph line two", "local_bbox": [100, 210, 900, 240]},
+        {"row_index": 5, "text": "\u2460 First", "local_bbox": [100, 260, 900, 290]},
+        {"row_index": 6, "text": "\u2461 Second", "local_bbox": [100, 310, 900, 340]},
+        {"row_index": 7, "text": "\u2462 Third", "local_bbox": [100, 360, 900, 390]},
+        {"row_index": 8, "text": "\u2463 Fourth", "local_bbox": [100, 410, 900, 440]},
+        {"row_index": 9, "text": "\u2464 Fifth", "local_bbox": [100, 460, 900, 490]},
+    ]
+    (run_dir / "page_001_left.paddleocr.json").write_text(json.dumps({"rows": rows}), encoding="utf-8")
+    payload = {
+        "artifact_type": "candidate_question_crop_suggestions",
+        "suggestions": [
+            {
+                "suggestion_id": "q01",
+                "kind": "candidate_question_crop_suggestion",
+                "question_number": 1,
+                "candidate_preview_path": "q01_candidate/q01_candidate_preview.png",
+                "parts": [
+                    {
+                        "page": 1,
+                        "column": "left",
+                        "block_id": "p001_left",
+                        "included_row_ids": [f"p001_left_r{index:03d}" for index in range(len(rows))],
+                    }
+                ],
+            },
+        ],
+    }
+    suggestions_path = run_dir / "suggestions.json"
+    suggestions_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    state = initialize_review_state("leet-2026-verbal-even", suggestions_path, data_root=tmp_path / "data")
+
+    question = state.candidates[0]
+    assert question.raw_ocr_text == (
+        "1. Which follows?\n\n"
+        "First paragraph line one\nFirst paragraph line two.\n\n"
+        "Second paragraph line one\nSecond paragraph line two\n"
+        "\u2460 First\n\u2461 Second\n\u2462 Third\n\u2463 Fourth\n\u2464 Fifth"
+    )
+    assert question.stem == (
+        "Which follows?\n"
+        "First paragraph line one First paragraph line two.\n"
+        "Second paragraph line one Second paragraph line two"
+    )
+    assert question.choices == ["First", "Second", "Third", "Fourth", "Fifth"]
+
+
 def test_passage_prefill_excludes_included_edge_header_fragments(tmp_path: Path) -> None:
     run_dir = tmp_path / "artifacts" / "question_crop_suggestions" / "run"
     (run_dir / "set_01_03_passage_candidate").mkdir(parents=True)
@@ -482,6 +538,37 @@ def test_question_prefill_splits_mixed_circled_and_bare_numeric_choice_markers()
     assert draft.choices[2].startswith("\uc5b4\ub5a4 \uc758\uc0ac\uacb0\uc815")
     assert draft.choices[3].startswith("\ucd5c\uc0c1\uc704\uc758 \uc758\uc0ac\uacb0\uc815")
     assert draft.choices[4].startswith("\uc758\uc0ac\uacb0\uc815 \ub178\ub4dc\uac00")
+    assert not draft.warnings
+
+
+def test_question_prefill_keeps_body_numbers_out_of_choices_before_choice_section() -> None:
+    raw = (
+        "8. Prompt for the question\n"
+        "The rule applies after a measurement.\n"
+        "1hour 30 minutes after the event is treated as the peak.\n"
+        "<\ubcf4 \uae30>\n"
+        "\u3131. First item\n"
+        "\u3134. Second item\n"
+        "\u3137. Third item\n"
+        "\u24607\n"
+        "\u2461 L\n"
+        "\u2462\n"
+        "7,\u3137\n"
+        "\u2463 \u3134,\u3137\n"
+        "\u24647, \u3134,\u3137"
+    )
+
+    draft = generate_ocr_draft(CandidateType.QUESTION, raw, question_number=8)
+
+    assert "1hour 30 minutes after the event" in draft.stem
+    assert "<\ubcf4 \uae30>" in draft.stem
+    assert draft.choices == [
+        "\u3131",
+        "\u3134",
+        "\u3131, \u3137",
+        "\u3134, \u3137",
+        "\u3131, \u3134, \u3137",
+    ]
     assert not draft.warnings
 
 
