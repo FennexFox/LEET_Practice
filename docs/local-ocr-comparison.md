@@ -159,6 +159,12 @@ status, and minimal options, but not PaddleOCR's full raw internal payload. Use
 `--include-raw-paddle-payload` only for short debug runs where the large raw
 payload is intentionally needed.
 
+`suggestions.json` also includes a `timings` object with stage durations for
+page/column preparation, OCR, stream construction, anchor detection, candidate
+crop and preview generation, annotated block generation, payload construction,
+and total runtime. The command summary prints the same timing fields. Preview
+stitching and candidate crop image work are included in `candidate_crops_seconds`.
+
 The tool processes pages incrementally. If a run is interrupted, it writes a
 partial `suggestions.json` for completed OCR blocks when possible and marks it
 with `status: partial_interrupted`. Retry with the same `--run-id`; by default

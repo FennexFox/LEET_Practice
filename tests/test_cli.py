@@ -167,6 +167,93 @@ def test_ocr_invalid_pages_fails_before_creating_run_dir(tmp_path: Path) -> None
     assert not (out_dir / "should-not-exist").exists()
 
 
+def test_verify_enables_local_nlp_cleanup_by_default(tmp_path: Path, suggestion_run: Path, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_initialize_review_state(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(candidates=[])
+
+    monkeypatch.setattr(cli, "initialize_review_state", fake_initialize_review_state)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "verify",
+            "leet-2026-verbal-even",
+            "--suggestions",
+            str(suggestion_run),
+            "--data-root",
+            str(tmp_path / "data"),
+            "--init-only",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["kwargs"]["enable_spacing_cleanup"] is True
+    assert captured["kwargs"]["enable_morphology_checks"] is True
+
+
+def test_verify_can_disable_default_local_nlp_cleanup(tmp_path: Path, suggestion_run: Path, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_initialize_review_state(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(candidates=[])
+
+    monkeypatch.setattr(cli, "initialize_review_state", fake_initialize_review_state)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "verify",
+            "leet-2026-verbal-even",
+            "--suggestions",
+            str(suggestion_run),
+            "--data-root",
+            str(tmp_path / "data"),
+            "--no-spacing-cleanup",
+            "--no-morphology-checks",
+            "--init-only",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["kwargs"]["enable_spacing_cleanup"] is False
+    assert captured["kwargs"]["enable_morphology_checks"] is False
+
+
+def test_review_crops_enables_local_nlp_cleanup_by_default(tmp_path: Path, suggestion_run: Path, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_initialize_review_state(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(candidates=[])
+
+    monkeypatch.setattr(cli, "initialize_review_state", fake_initialize_review_state)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "review-crops",
+            "--exam-id",
+            "leet-2026-verbal-even",
+            "--suggestions",
+            str(suggestion_run),
+            "--data-root",
+            str(tmp_path / "data"),
+            "--init-only",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["kwargs"]["enable_spacing_cleanup"] is True
+    assert captured["kwargs"]["enable_morphology_checks"] is True
+
+
 def test_verify_forwards_local_nlp_workers(tmp_path: Path, suggestion_run: Path, monkeypatch) -> None:
     captured: dict[str, object] = {}
 

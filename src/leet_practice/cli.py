@@ -198,8 +198,8 @@ def _run_review_crops(
     init_only: bool = False,
     overwrite: bool = False,
     refresh_preserving_edits: bool = False,
-    enable_spacing_cleanup: bool = False,
-    enable_morphology_checks: bool = False,
+    enable_spacing_cleanup: bool = True,
+    enable_morphology_checks: bool = True,
     local_nlp_workers: int | None = None,
     unsafe_allow_remote: bool = False,
 ) -> None:
@@ -217,6 +217,7 @@ def _run_review_crops(
             enable_spacing_cleanup=enable_spacing_cleanup,
             enable_morphology_checks=enable_morphology_checks,
             local_nlp_workers=local_nlp_workers,
+            progress=console.print,
         )
     except VerificationError as exc:
         console.print(f"[red]Verification setup failed:[/red] {exc}")
@@ -275,14 +276,14 @@ def verify_command(
         help="Rebuild OCR-derived fields while preserving manually edited review fields for matching candidates.",
     ),
     enable_spacing_cleanup: bool = typer.Option(
-        False,
-        "--enable-spacing-cleanup",
-        help="Apply optional local Korean spacing cleanup to OCR drafts when a backend is installed.",
+        True,
+        "--enable-spacing-cleanup/--no-spacing-cleanup",
+        help="Apply local Korean spacing cleanup to OCR drafts when a backend is installed.",
     ),
     enable_morphology_checks: bool = typer.Option(
-        False,
-        "--enable-morphology-checks",
-        help="Run optional Kiwi/kiwipiepy morphology checks for OCR draft warnings when installed.",
+        True,
+        "--enable-morphology-checks/--no-morphology-checks",
+        help="Run Kiwi/kiwipiepy morphology checks for OCR draft warnings when installed.",
     ),
     local_nlp_workers: int | None = typer.Option(
         None,
@@ -338,14 +339,14 @@ def review_crops_command(
         help="Rebuild OCR-derived fields while preserving manually edited review fields for matching candidates.",
     ),
     enable_spacing_cleanup: bool = typer.Option(
-        False,
-        "--enable-spacing-cleanup",
-        help="Apply optional local Korean spacing cleanup to OCR drafts when a backend is installed.",
+        True,
+        "--enable-spacing-cleanup/--no-spacing-cleanup",
+        help="Apply local Korean spacing cleanup to OCR drafts when a backend is installed.",
     ),
     enable_morphology_checks: bool = typer.Option(
-        False,
-        "--enable-morphology-checks",
-        help="Run optional Kiwi/kiwipiepy morphology checks for OCR draft warnings when installed.",
+        True,
+        "--enable-morphology-checks/--no-morphology-checks",
+        help="Run Kiwi/kiwipiepy morphology checks for OCR draft warnings when installed.",
     ),
     local_nlp_workers: int | None = typer.Option(
         None,
