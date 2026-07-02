@@ -129,9 +129,10 @@ def test_run_ocr_for_blocks_uses_batch_and_writes_compact_artifacts(
 
     monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "run_paddleocr_batch", fake_batch)
 
-    ocr_blocks, errors = module.run_ocr_for_blocks(raw_blocks, _ocr_args(), tmp_path)
+    ocr_blocks, errors, interrupted = module.run_ocr_for_blocks(raw_blocks, _ocr_args(), tmp_path)
 
     assert errors == []
+    assert interrupted is False
     assert [block.raw_rows[0]["text"] for block in ocr_blocks] == ["1. left", "2. right"]
     assert sorted(path.name for path in tmp_path.glob("*.paddleocr.*")) == [
         "page_001_left.paddleocr.json",
@@ -172,9 +173,10 @@ def test_run_ocr_for_blocks_falls_back_when_batch_fails(tmp_path: Path, monkeypa
     monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "run_paddleocr_batch", fake_batch)
     monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "run_ocr_for_block", fake_single)
 
-    ocr_blocks, errors = module.run_ocr_for_blocks(raw_blocks, _ocr_args(), tmp_path)
+    ocr_blocks, errors, interrupted = module.run_ocr_for_blocks(raw_blocks, _ocr_args(), tmp_path)
 
     assert errors == []
+    assert interrupted is False
     assert calls == ["left", "right"]
     assert [block.raw_rows[0]["text"] for block in ocr_blocks] == ["left", "right"]
 
@@ -194,11 +196,70 @@ def test_run_ocr_for_blocks_falls_back_on_batch_result_count_mismatch(tmp_path: 
     monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "run_paddleocr_batch", fake_batch)
     monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "run_ocr_for_block", fake_single)
 
-    ocr_blocks, errors = module.run_ocr_for_blocks(raw_blocks, _ocr_args(), tmp_path)
+    ocr_blocks, errors, interrupted = module.run_ocr_for_blocks(raw_blocks, _ocr_args(), tmp_path)
 
     assert errors == []
+    assert interrupted is False
     assert calls == ["left", "right"]
     assert [block.raw_rows[0]["text"] for block in ocr_blocks] == ["left", "right"]
+
+
+def test_build_stream_preserves_partial_ocr_blocks_after_keyboard_interrupt(tmp_path: Path, monkeypatch) -> None:
+    module = _load_suggest_question_crops()
+    raw_blocks = [_raw_block(module, 0, 1, "left", tmp_path), _raw_block(module, 1, 1, "right", tmp_path)]
+    calls: list[str] = []
+
+    def fake_prepare(args, run_dir):
+        return raw_blocks
+
+    def fake_single(block, args, run_dir):
+        calls.append(block["column"])
+        if block["column"] == "right":
+            raise KeyboardInterrupt
+        return ([{"text": "1. kept", "confidence": 1.0, "box": [1, 20, 20, 40]}], None)
+
+    monkeypatch.setitem(module.build_stream.__globals__, "prepare_page_column_blocks", fake_prepare)
+    monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "run_paddleocr_batch", lambda *_: (_ for _ in ()).throw(ValueError("no batch")))
+    monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "run_ocr_for_block", fake_single)
+    monkeypatch.setitem(module.build_suggestions_payload.__globals__, "save_candidate_crops", lambda **_: [])
+    monkeypatch.setitem(module.build_suggestions_payload.__globals__, "save_annotated_blocks", lambda *_, **__: [])
+
+    args = SimpleNamespace(
+        pages="1",
+        pdf=Path("paper.pdf"),
+        dpi=300,
+        content_padding=0,
+        stream_gap=40,
+        min_anchor_score=0.48,
+        allow_weak_question_anchors=False,
+        no_annotated_blocks=True,
+        crop_top=0.05,
+        crop_bottom=0.94,
+        crop_left=0.05,
+        crop_right=0.95,
+        center_gutter=0.012,
+        crop_padding=24,
+        keep_crop_part_images=False,
+        include_raw_paddle_payload=False,
+        reuse_existing_images=False,
+        paddle_lang="korean",
+        paddle_device=None,
+        paddle_cpu_threads=4,
+        paddle_disable_mkldnn=True,
+        paddle_text_recognition_batch_size=None,
+        paddle_disable_pir=True,
+        paddle_disable_doc_preprocess=True,
+        paddle_preimport_torch=True,
+        paddle_preimport_paddle=False,
+    )
+
+    payload = module.build_stream(args, tmp_path)
+
+    assert calls == ["left", "right"]
+    assert payload["status"] == "partial_interrupted"
+    assert payload["interrupted"] is True
+    assert [block["block_id"] for block in payload["blocks"]] == ["p001_left"]
+    assert [row["text"] for row in payload["rows"]] == ["1. kept"]
 
 
 def test_suggestions_payload_top_level_schema_is_stable(tmp_path: Path) -> None:

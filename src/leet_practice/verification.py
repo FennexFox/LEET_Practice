@@ -540,6 +540,8 @@ def build_cleanup_backends(options: DraftOptions | None = None) -> CleanupBacken
                 spacing = module.Spacing()
             except Exception as exc:  # noqa: BLE001 - optional backend should not break review.
                 backends.spacing_setup_warning = f"spacing_backend_failed:pykospacing:{exc}"
+                if options.enable_morphology_checks:
+                    backends.kiwi, backends.kiwi_setup_warning = _build_kiwi(options.local_nlp_workers)
                 return backends
             backends.spacing_backend = SpacingBackend("pykospacing", spacing)
             if options.enable_morphology_checks:
@@ -564,6 +566,8 @@ def build_cleanup_backends(options: DraftOptions | None = None) -> CleanupBacken
                 return backends
             except Exception as exc:  # noqa: BLE001 - optional backend should not break review.
                 backends.spacing_setup_warning = f"spacing_backend_failed:korspacing:{exc}"
+                if options.enable_morphology_checks:
+                    backends.kiwi, backends.kiwi_setup_warning = _build_kiwi(options.local_nlp_workers)
                 return backends
 
         spacing_kiwi, spacing_kiwi_warning = _build_kiwi()
@@ -654,14 +658,11 @@ def _kiwi_morphology_warnings(text: str, backends: CleanupBackends | None = None
             return [f"kiwi_backend_failed:{exc}"], []
         return _morphology_warnings_from_tokens(text, tokens)
 
+    kiwi, warning = _build_kiwi()
+    if kiwi is None:
+        return [warning or "kiwi_backend_unavailable"], []
     try:
-        module = import_module("kiwipiepy")
-    except ImportError:
-        return ["kiwi_backend_unavailable"], []
-    if not hasattr(module, "Kiwi"):
-        return ["kiwi_backend_unavailable:no_kiwi_class"], []
-    try:
-        tokens = module.Kiwi().tokenize(text)
+        tokens = kiwi.tokenize(text)
     except Exception as exc:  # noqa: BLE001 - optional backend should not break review.
         return [f"kiwi_backend_failed:{exc}"], []
 
@@ -681,6 +682,19 @@ def _morphology_warnings_from_tokens(text: str, tokens: Any) -> tuple[list[str],
     return warnings, ["kiwi_morphology_checked"]
 
 
+def _tokens_from_kiwi_analysis_item(item: Any) -> Any:
+    if not item:
+        return []
+    candidate = item
+    if isinstance(item, list):
+        candidate = item[0] if item else ([], 0.0)
+    if isinstance(candidate, tuple):
+        if not candidate:
+            return []
+        return candidate[0]
+    return candidate
+
+
 def _kiwi_morphology_warnings_batch(
     texts: list[str],
     backends: CleanupBackends,
@@ -694,7 +708,7 @@ def _kiwi_morphology_warnings_batch(
             raise ValueError("Kiwi batch analysis returned an unexpected result count")
         results: list[tuple[list[str], list[str]]] = []
         for text, item in zip(texts, analyzed, strict=True):
-            tokens = item[0] if isinstance(item, tuple) and item else item
+            tokens = _tokens_from_kiwi_analysis_item(item)
             results.append(_morphology_warnings_from_tokens(text, tokens))
         return results
     except Exception:

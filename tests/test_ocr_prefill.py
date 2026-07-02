@@ -660,6 +660,47 @@ def test_review_state_initialization_reuses_cleanup_backend_instances(
     assert all("kiwi_morphology_checked" in candidate.correction_steps for candidate in state.candidates)
 
 
+def test_spacing_backend_init_failure_still_allows_kiwi_morphology(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingSpacing:
+        def __init__(self) -> None:
+            raise RuntimeError("spacing init failed")
+
+    class FakeKiwi:
+        def analyze(self, texts: list[str]) -> list[list[tuple[list[object], float]]]:
+            return [[([object()], 0.0)] for _ in texts]
+
+        def tokenize(self, text: str) -> list[object]:
+            raise AssertionError("batch morphology should not call per-text tokenize")
+
+    def fake_import(name: str):
+        if name == "pykospacing":
+            return SimpleNamespace(Spacing=FailingSpacing)
+        if name == "kiwipiepy":
+            return SimpleNamespace(Kiwi=lambda **_: FakeKiwi())
+        raise ImportError(name)
+
+    monkeypatch.setattr(verification, "import_module", fake_import)
+    suggestions_path = write_suggestion_run(
+        tmp_path,
+        passage_text="passage text",
+        question_text="1. question\n1) one\n2) two\n3) three\n4) four\n5) five",
+    )
+
+    state = initialize_review_state(
+        "leet-2026-verbal-even",
+        suggestions_path,
+        data_root=tmp_path / "data",
+        enable_spacing_cleanup=True,
+        enable_morphology_checks=True,
+    )
+
+    assert all("spacing_backend_failed:pykospacing:spacing init failed" in candidate.prefill_warnings for candidate in state.candidates)
+    assert all("kiwi_morphology_checked" in candidate.correction_steps for candidate in state.candidates)
+
+
 def test_morphology_batch_uses_configured_kiwi_workers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -670,9 +711,9 @@ def test_morphology_batch_uses_configured_kiwi_workers(
         def __init__(self, num_workers: int | None = None) -> None:
             calls["workers"] = num_workers
 
-        def analyze(self, texts: list[str]) -> list[tuple[list[object], float]]:
+        def analyze(self, texts: list[str]) -> list[list[tuple[list[object], float]]]:
             calls["analyze_texts"] = list(texts)
-            return [([object()], 0.0) for _ in texts]
+            return [[([object()], 0.0)] for _ in texts]
 
         def tokenize(self, text: str) -> list[object]:
             raise AssertionError("batch morphology should not call per-text tokenize")
@@ -762,10 +803,10 @@ def test_morphology_batch_falls_back_to_per_text_tokenize(
             def __init__(self, num_workers: int | None = None) -> None:
                 self.num_workers = num_workers
 
-            def analyze(self, texts: list[str]) -> list[tuple[list[object], float]]:
+            def analyze(self, texts: list[str]) -> list[list[tuple[list[object], float]]]:
                 if mode == "analyze_raises":
                     raise RuntimeError("batch failed")
-                return [([object()], 0.0)]
+                return [[([object()], 0.0)]]
 
             def tokenize(self, text: str) -> list[object]:
                 tokenized_texts.append(text)
@@ -806,9 +847,9 @@ def test_combined_spacing_and_morphology_checks_batch_analyzes_spacing_cleaned_t
             return text.replace("withoutspace", "without space")
 
     class FakeKiwi:
-        def analyze(self, texts: list[str]) -> list[tuple[list[object], float]]:
+        def analyze(self, texts: list[str]) -> list[list[tuple[list[object], float]]]:
             calls["analyze_texts"] = list(texts)
-            return [([object()], 0.0) for _ in texts]
+            return [[([object()], 0.0)] for _ in texts]
 
         def tokenize(self, text: str) -> list[object]:
             raise AssertionError("successful combined batch path should not call per-text tokenize")

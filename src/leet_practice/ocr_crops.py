@@ -1356,23 +1356,28 @@ def _run_ocr_for_blocks_individually(
     raw_blocks: list[RawBlock],
     args: argparse.Namespace,
     run_dir: Path,
-) -> tuple[list[OcrBlock], list[dict[str, Any]]]:
+) -> tuple[list[OcrBlock], list[dict[str, Any]], bool]:
     ocr_blocks: list[OcrBlock] = []
     ocr_errors: list[dict[str, Any]] = []
+    interrupted = False
     for raw_block in raw_blocks:
-        print(f"Running PaddleOCR on page {raw_block.page} {raw_block.column}...")
-        raw_rows, error = run_ocr_for_block(raw_block.ocr_input(), args, run_dir)
+        try:
+            print(f"Running PaddleOCR on page {raw_block.page} {raw_block.column}...")
+            raw_rows, error = run_ocr_for_block(raw_block.ocr_input(), args, run_dir)
+        except KeyboardInterrupt:
+            interrupted = True
+            break
         if error:
             ocr_errors.append(_ocr_error(raw_block, error))
         ocr_blocks.append(OcrBlock(raw_block=raw_block, raw_rows=raw_rows, error=error))
-    return ocr_blocks, ocr_errors
+    return ocr_blocks, ocr_errors, interrupted
 
 
 def run_ocr_for_blocks(
     raw_blocks: list[RawBlock],
     args: argparse.Namespace,
     run_dir: Path,
-) -> tuple[list[OcrBlock], list[dict[str, Any]]]:
+) -> tuple[list[OcrBlock], list[dict[str, Any]], bool]:
     if len(raw_blocks) <= 1:
         return _run_ocr_for_blocks_individually(raw_blocks, args, run_dir)
 
@@ -1388,7 +1393,7 @@ def run_ocr_for_blocks(
         for raw_block, (_, payload) in zip(raw_blocks, batch_results, strict=True):
             raw_rows = write_ocr_block_artifacts(raw_block.ocr_input(), payload, args, run_dir)
             ocr_blocks.append(OcrBlock(raw_block=raw_block, raw_rows=raw_rows))
-        return ocr_blocks, []
+        return ocr_blocks, [], False
     except Exception as exc:  # noqa: BLE001 - unsupported batch OCR should preserve current behavior.
         print(f"Batch OCR unavailable; falling back to per-block OCR: {exc}")
         return _run_ocr_for_blocks_individually(raw_blocks, args, run_dir)
@@ -1516,7 +1521,10 @@ def build_stream(args: argparse.Namespace, run_dir: Path) -> dict[str, Any]:
 
     try:
         raw_blocks = prepare_page_column_blocks(args, run_dir)
-        ocr_blocks, ocr_errors = run_ocr_for_blocks(raw_blocks, args, run_dir)
+        ocr_blocks, ocr_errors, ocr_interrupted = run_ocr_for_blocks(raw_blocks, args, run_dir)
+        interrupted = ocr_interrupted or len(ocr_blocks) < len(raw_blocks)
+        if interrupted:
+            print("\nInterrupted; writing partial suggestions for completed OCR blocks...")
     except KeyboardInterrupt:
         interrupted = True
         print("\nInterrupted; writing partial suggestions for completed OCR blocks...")
