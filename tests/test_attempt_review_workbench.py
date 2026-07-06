@@ -59,6 +59,8 @@ def test_attempt_review_workbench_serves_state_and_updates_review(tmp_path: Path
         assert "passage-text" in root
         assert "Free-form reconstruction" in root
         assert "Your current post-hoc understanding" in root
+        assert "diagnosis.textContent" in root
+        assert "createTextNode(feedback.correction_rule" in root
 
         state = json.loads(urllib.request.urlopen(f"{base_url}/api/state", timeout=5).read().decode("utf-8"))
         assert state["score"] == 0

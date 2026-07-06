@@ -415,6 +415,25 @@ def test_ocr_benchmark_summary_writes_summary_files(tmp_path: Path) -> None:
     assert [record["run_kind"] for record in payload["records"]] == ["cold", "warm"]
 
 
+def test_ocr_benchmark_summary_reports_invalid_json(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline" / "suggestions.json"
+    baseline.parent.mkdir(parents=True)
+    baseline.write_text("{", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "ocr-benchmark-summary",
+            str(baseline),
+            "--out-dir",
+            str(tmp_path / "summary"),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "OCR benchmark summary failed:" in result.output
+
+
 def test_verify_enables_local_nlp_cleanup_by_default(tmp_path: Path, suggestion_run: Path, monkeypatch) -> None:
     captured: dict[str, object] = {}
 

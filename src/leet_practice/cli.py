@@ -489,19 +489,23 @@ def ocr_benchmark_summary_command(
 ) -> None:
     """Summarize OCR benchmark results from suggestion artifacts."""
 
-    baseline_payload = json.loads(baseline.read_text(encoding="utf-8"))
-    records = [benchmark_record(name=baseline.parent.name, run_kind=baseline_kind, payload=baseline_payload)]
-    for path in candidate:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        records.append(
-            benchmark_record(
-                name=path.parent.name,
-                run_kind=candidate_kind,
-                payload=payload,
-                baseline_payload=baseline_payload,
+    try:
+        baseline_payload = json.loads(baseline.read_text(encoding="utf-8"))
+        records = [benchmark_record(name=baseline.parent.name, run_kind=baseline_kind, payload=baseline_payload)]
+        for path in candidate:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            records.append(
+                benchmark_record(
+                    name=path.parent.name,
+                    run_kind=candidate_kind,
+                    payload=payload,
+                    baseline_payload=baseline_payload,
+                )
             )
-        )
-    json_path, csv_path = write_benchmark_summary(records, out_dir)
+        json_path, csv_path = write_benchmark_summary(records, out_dir)
+    except (json.JSONDecodeError, ValueError, KeyError) as exc:
+        console.print(f"[red]OCR benchmark summary failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
     console.print(f"Benchmark summary: {json_path}")
     console.print(f"Benchmark CSV: {csv_path}")
 

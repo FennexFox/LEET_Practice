@@ -197,6 +197,23 @@ def test_regrade_updates_selected_answers_and_preserves_user_self_review(tmp_pat
     assert review.status == AttemptReviewStatus.USER_ENTERED
 
 
+def test_regrade_reports_only_reviews_touched_by_update(tmp_path: Path) -> None:
+    data_root = tmp_path / "data"
+    exam_id = "leet-2026-reasoning-even"
+    _write_answer_key(data_root, exam_id, {1: 1, 2: 4, 3: 5})
+    create_attempt_record("attempt-001", exam_id, "111", data_root=data_root)
+    initialize_attempt_reviews("attempt-001", data_root=data_root)
+    untouched_path = review_path("attempt-001", 2, data_root=data_root)
+    untouched_before = json.loads(untouched_path.read_text(encoding="utf-8"))
+
+    result = regrade_attempt("attempt-001", {3: 4}, data_root=data_root)
+
+    untouched_after = json.loads(untouched_path.read_text(encoding="utf-8"))
+    assert result.wrong_question_numbers == [2, 3]
+    assert result.updated_question_numbers == [3]
+    assert untouched_after == untouched_before
+
+
 def test_regrade_archives_review_when_question_becomes_correct(tmp_path: Path) -> None:
     data_root = tmp_path / "data"
     exam_id = "leet-2026-reasoning-even"
@@ -356,6 +373,31 @@ def test_update_user_self_review_accepts_simplified_fields(tmp_path: Path) -> No
     assert review.user_self_review.reasoning_text == "I remembered the surface match."
     assert review.user_self_review.current_reflection == "I should compare conditions."
     assert review.user_self_review.memory_confidence == MemoryConfidence.UNCLEAR
+
+
+def test_update_user_self_review_preserves_ready_status_when_status_omitted(tmp_path: Path) -> None:
+    data_root = tmp_path / "data"
+    exam_id = "leet-2026-reasoning-even"
+    _write_answer_key(data_root, exam_id, {1: 3})
+    create_attempt_record("attempt-001", exam_id, "1", data_root=data_root)
+    initialize_attempt_reviews("attempt-001", data_root=data_root)
+    update_user_self_review(
+        "attempt-001",
+        1,
+        {"reasoning_text": "Initial reasoning.", "status": "ready_for_feedback"},
+        data_root=data_root,
+    )
+
+    review = update_user_self_review(
+        "attempt-001",
+        1,
+        {"current_reflection": "Later note."},
+        data_root=data_root,
+    )
+
+    assert review.status == AttemptReviewStatus.READY_FOR_FEEDBACK
+    assert review.user_self_review.reasoning_text == "Initial reasoning."
+    assert review.user_self_review.current_reflection == "Later note."
 
 
 def test_migrate_self_review_merges_legacy_fields_and_preserves_feedback(tmp_path: Path) -> None:

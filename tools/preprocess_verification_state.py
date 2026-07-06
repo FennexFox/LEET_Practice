@@ -288,6 +288,15 @@ def preprocess_state(state: dict[str, Any], *, set_status: str | None) -> tuple[
         result = split_question(raw_text)
         old_stem = candidate.get("stem")
         old_choices = candidate.get("choices")
+        parse_failed = not result.stem.strip() or any(not choice for choice in result.choices)
+        if parse_failed:
+            note = "auto-preprocess skipped: parse failed"
+            if result.warnings:
+                note += "; " + " | ".join(result.warnings)
+            candidate["notes"] = merge_note(str(candidate.get("notes") or ""), note)
+            report.append(f"q{qno:02d}: skipped (parse failed, kept existing data)")
+            continue
+
         candidate["stem"] = result.stem
         candidate["choices"] = result.choices
         candidate["manually_edited"] = True

@@ -354,35 +354,36 @@ def create_attempt_record(
     notes: str | None = None,
     overwrite: bool = False,
 ) -> AttemptRecord:
-    path = attempt_path(attempt_id, data_root=data_root)
-    if path.exists() and not overwrite:
-        raise AttemptReviewError(f"Attempt already exists: {path}")
-    selected = parse_answer_string(answers) if isinstance(answers, str) else answers
-    if mode == "real":
-        answer_key = load_answer_key(exam_id, data_root=data_root)
-        expected_count = len(answer_key.answers)
-        if len(selected) != expected_count:
-            raise AttemptReviewError(
-                f"Real-mode attempt has {len(selected)} answer(s), but canonical answer key has {expected_count}."
+    with _attempt_review_lock:
+        path = attempt_path(attempt_id, data_root=data_root)
+        if path.exists() and not overwrite:
+            raise AttemptReviewError(f"Attempt already exists: {path}")
+        selected = parse_answer_string(answers) if isinstance(answers, str) else answers
+        if mode == "real":
+            answer_key = load_answer_key(exam_id, data_root=data_root)
+            expected_count = len(answer_key.answers)
+            if len(selected) != expected_count:
+                raise AttemptReviewError(
+                    f"Real-mode attempt has {len(selected)} answer(s), but canonical answer key has {expected_count}."
+                )
+        now = _now()
+        try:
+            attempt = AttemptRecord(
+                id=attempt_id,
+                exam_id=exam_id,
+                mode=mode,  # type: ignore[arg-type]
+                answers=[
+                    AttemptChoiceAnswer(question_no=index, selected_choice=choice)
+                    for index, choice in enumerate(selected, start=1)
+                ],
+                notes=notes,
+                created_at=now,
+                updated_at=now,
             )
-    now = _now()
-    try:
-        attempt = AttemptRecord(
-            id=attempt_id,
-            exam_id=exam_id,
-            mode=mode,  # type: ignore[arg-type]
-            answers=[
-                AttemptChoiceAnswer(question_no=index, selected_choice=choice)
-                for index, choice in enumerate(selected, start=1)
-            ],
-            notes=notes,
-            created_at=now,
-            updated_at=now,
-        )
-    except ValidationError as exc:
-        raise AttemptReviewError(f"Invalid attempt record: {exc}") from exc
-    save_attempt_record(attempt, data_root=data_root)
-    return attempt
+        except ValidationError as exc:
+            raise AttemptReviewError(f"Invalid attempt record: {exc}") from exc
+        save_attempt_record(attempt, data_root=data_root)
+        return attempt
 
 
 def load_attempt_record(attempt_id: str, *, data_root: Path = Path("data")) -> AttemptRecord:
@@ -569,11 +570,17 @@ def regrade_attempt(
                     grading.correct_choice,
                     context,
                 )
+                save_review_record(review, data_root=data_root)
+                updated_questions.append(answer.question_no)
             else:
                 grading_changed = existing_review.grading != grading
+                question_id = context.question_id if context else existing_review.question_id
+                metadata_changed = existing_review.exam_id != updated_attempt.exam_id or existing_review.question_id != question_id
+                if not grading_changed and not metadata_changed and answer.question_no not in answer_updates:
+                    continue
                 patch: dict[str, Any] = {
                     "exam_id": updated_attempt.exam_id,
-                    "question_id": context.question_id if context else existing_review.question_id,
+                    "question_id": question_id,
                     "grading": grading,
                     "updated_at": _now(),
                 }
@@ -586,8 +593,8 @@ def regrade_attempt(
                         else AttemptReviewStatus.UNREVIEWED
                     )
                 review = existing_review.model_copy(update=patch)
-            save_review_record(review, data_root=data_root)
-            updated_questions.append(answer.question_no)
+                save_review_record(review, data_root=data_root)
+                updated_questions.append(answer.question_no)
 
         archived_questions: list[int] = []
         for question_no in sorted(existing_reviews):
@@ -675,7 +682,12 @@ def update_user_self_review(
         if not current.get("created_at"):
             current["created_at"] = current["updated_at"]
         status_raw = payload.get("status")
-        status = AttemptReviewStatus(status_raw) if status_raw else AttemptReviewStatus.USER_ENTERED
+        if status_raw:
+            status = AttemptReviewStatus(status_raw)
+        elif review.status in {AttemptReviewStatus.USER_ENTERED, AttemptReviewStatus.READY_FOR_FEEDBACK}:
+            status = review.status
+        else:
+            status = AttemptReviewStatus.USER_ENTERED
         if status not in {AttemptReviewStatus.USER_ENTERED, AttemptReviewStatus.READY_FOR_FEEDBACK}:
             raise AttemptReviewError(
                 "Self-review status updates may only set user_entered or ready_for_feedback."
@@ -1036,11 +1048,20 @@ def workbench_html() -> str:
     function renderFeedback() {
       const box = document.getElementById("feedback");
       const feedback = current.assistant_feedback;
+      box.innerHTML = "";
+      const heading = document.createElement("strong"); heading.textContent = "Assistant feedback";
+      box.appendChild(heading);
       if (!feedback) {
-        box.innerHTML = '<strong>Assistant feedback</strong><p class="muted">No feedback imported yet.</p>';
+        const empty = document.createElement("p"); empty.className = "muted"; empty.textContent = "No feedback imported yet.";
+        box.appendChild(empty);
       } else {
         const tags = (feedback.provisional_error_tags || []).join(", ") || "none";
-        box.innerHTML = `<strong>Assistant feedback</strong><p>${feedback.diagnosis_text || ""}</p><p><b>Provisional tags:</b> ${tags}</p><p><b>Correction rule:</b> ${feedback.correction_rule || ""}</p>`;
+        const diagnosis = document.createElement("p"); diagnosis.textContent = feedback.diagnosis_text || "";
+        const tagsP = document.createElement("p");
+        tagsP.append(Object.assign(document.createElement("b"), {textContent: "Provisional tags: "}), document.createTextNode(tags));
+        const ruleP = document.createElement("p");
+        ruleP.append(Object.assign(document.createElement("b"), {textContent: "Correction rule: "}), document.createTextNode(feedback.correction_rule || ""));
+        box.append(diagnosis, tagsP, ruleP);
       }
       const resolution = current.user_resolution || {};
       document.getElementById("resolution_status").value = resolution.status || "pending";

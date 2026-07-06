@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 def _load_suggest_question_crops():
     tools_dir = Path(__file__).resolve().parents[1] / "tools"
@@ -237,6 +239,14 @@ def test_run_ocr_for_blocks_batches_in_progress_chunks(tmp_path: Path, monkeypat
         "page_004_left",
         "page_005_left",
     ]
+
+
+def test_run_ocr_for_blocks_rejects_non_positive_batch_chunk_size(tmp_path: Path) -> None:
+    module = _load_suggest_question_crops()
+    raw_blocks = [_raw_block(module, index, index + 1, "left", tmp_path) for index in range(2)]
+
+    with pytest.raises(ValueError, match="ocr_batch_chunk_size"):
+        module.run_ocr_for_blocks(raw_blocks, _ocr_args(ocr_batch_chunk_size=0), tmp_path)
 
 
 def test_run_ocr_for_blocks_falls_back_only_for_remaining_chunk_after_batch_failure(

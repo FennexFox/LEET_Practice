@@ -105,6 +105,13 @@ class BatchOcrPartialFailure(Exception):
         self.completed_results = completed_results
 
 
+def ocr_batch_chunk_size(args: argparse.Namespace) -> int:
+    chunk_size = int(getattr(args, "ocr_batch_chunk_size", OCR_BATCH_PROGRESS_CHUNK_SIZE))
+    if chunk_size <= 0:
+        raise ValueError("ocr_batch_chunk_size must be greater than 0")
+    return chunk_size
+
+
 def run_paddleocr_batch_with_progress(
     raw_blocks: list[RawBlock],
     args: argparse.Namespace,
@@ -112,7 +119,7 @@ def run_paddleocr_batch_with_progress(
     batch_start: float,
 ) -> tuple[list[tuple[str, dict[str, Any]]], bool]:
     image_paths = [Path(raw_block.image_path) for raw_block in raw_blocks]
-    chunk_size = max(1, int(getattr(args, "ocr_batch_chunk_size", OCR_BATCH_PROGRESS_CHUNK_SIZE)))
+    chunk_size = ocr_batch_chunk_size(args)
     chunk_count = (len(image_paths) + chunk_size - 1) // chunk_size
     batch_results: list[tuple[str, dict[str, Any]]] = []
     for chunk_index, offset in enumerate(range(0, len(image_paths), chunk_size), start=1):
@@ -1511,7 +1518,7 @@ def run_ocr_for_blocks(
         return _run_ocr_for_blocks_individually(raw_blocks, args, run_dir)
 
     batch_start = time.perf_counter()
-    chunk_size = max(1, int(getattr(args, "ocr_batch_chunk_size", OCR_BATCH_PROGRESS_CHUNK_SIZE)))
+    chunk_size = ocr_batch_chunk_size(args)
     chunk_count = (len(raw_blocks) + chunk_size - 1) // chunk_size
     progress(f"Running PaddleOCR batch on {len(raw_blocks)} page-column blocks in {chunk_count} chunks...")
     progress("PaddleOCR batch is running inside the OCR library; heartbeat appears while each chunk is active.")
