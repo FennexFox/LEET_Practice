@@ -47,6 +47,10 @@ Open the local browser workbench:
 leet-practice attempt-review serve attempt-001
 ```
 
+When `questions.jsonl` links a question to `passages.jsonl` with `passage_id`,
+the workbench shows the passage above the question text. Feedback export includes
+that passage text so assistant feedback can use the same evidence the user sees.
+
 Export a local bundle for assistant feedback:
 
 ```powershell

@@ -47,6 +47,7 @@ class ReviewQuestionContext(BaseModel):
     question_no: int = Field(gt=0)
     question_id: str | None = None
     passage_id: str | None = None
+    passage_text: str | None = None
     stem: str | None = None
     choices: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -105,6 +106,10 @@ def answer_key_path(exam_id: str, *, data_root: Path = Path("data")) -> Path:
 
 def questions_path(exam_id: str, *, data_root: Path = Path("data")) -> Path:
     return canonical_dir(exam_id, data_root=data_root) / "questions.jsonl"
+
+
+def passages_path(exam_id: str, *, data_root: Path = Path("data")) -> Path:
+    return canonical_dir(exam_id, data_root=data_root) / "passages.jsonl"
 
 
 def _now() -> datetime:
@@ -200,10 +205,30 @@ def _load_answer_key_json(path: Path) -> dict[int, int]:
         raise AttemptReviewError(f"Invalid answer key {path}: {exc}") from exc
 
 
+def _load_passage_texts(exam_id: str, *, data_root: Path = Path("data")) -> dict[str, str]:
+    path = passages_path(exam_id, data_root=data_root)
+    if not path.exists():
+        return {}
+    passages: dict[str, str] = {}
+    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+            passage_id = row["id"]
+            body_text = row.get("body_text") or row.get("text") or row.get("passage_text")
+        except (KeyError, json.JSONDecodeError) as exc:
+            raise AttemptReviewError(f"Invalid passages.jsonl row {line_no}: {exc}") from exc
+        if body_text:
+            passages[str(passage_id)] = str(body_text)
+    return passages
+
+
 def load_question_contexts(exam_id: str, *, data_root: Path = Path("data")) -> dict[int, ReviewQuestionContext]:
     path = questions_path(exam_id, data_root=data_root)
     if not path.exists():
         return {}
+    passages = _load_passage_texts(exam_id, data_root=data_root)
     contexts: dict[int, ReviewQuestionContext] = {}
     for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if not line.strip():
@@ -217,6 +242,7 @@ def load_question_contexts(exam_id: str, *, data_root: Path = Path("data")) -> d
             question_no=question_no,
             question_id=row.get("id"),
             passage_id=row.get("passage_id"),
+            passage_text=passages.get(str(row.get("passage_id"))) if row.get("passage_id") else None,
             stem=row.get("stem"),
             choices=list(row.get("choices") or []),
         )
@@ -815,6 +841,9 @@ def workbench_html() -> str:
     .queue-item strong { display: block; }
     .queue-item span { color: #5f6368; font-size: 12px; }
     .question { padding: 16px; }
+    .passage-box { border-bottom: 1px solid #d7d7d2; margin-bottom: 16px; padding-bottom: 16px; }
+    .passage-box.hidden { display: none; }
+    .passage-text { white-space: pre-wrap; line-height: 1.7; overflow-wrap: anywhere; }
     #stem { white-space: pre-wrap; line-height: 1.65; overflow-wrap: anywhere; }
     .choice { display: grid; grid-template-columns: 28px minmax(0, 1fr); padding: 8px 0; border-bottom: 1px solid #e6e6e2; }
     .choice strong { display: inline-block; width: 28px; }
@@ -842,6 +871,10 @@ def workbench_html() -> str:
     <section class="question">
       <h2 id="questionTitle"></h2>
       <div id="grading"></div>
+      <div id="passageBox" class="passage-box hidden">
+        <h3>Passage</h3>
+        <div id="passageText" class="passage-text"></div>
+      </div>
       <h3>Question</h3>
       <p id="stem" class="muted"></p>
       <div id="choices"></div>
@@ -906,6 +939,11 @@ def workbench_html() -> str:
       const question = state.questions[String(questionNo)] || state.questions[questionNo] || {};
       document.getElementById("questionTitle").textContent = `Question ${questionNo}`;
       document.getElementById("grading").innerHTML = `Selected <span class="pill bad">${current.grading.selected_choice}</span> Correct <span class="pill good">${current.grading.correct_choice}</span>`;
+      const passageBox = document.getElementById("passageBox");
+      const passageText = document.getElementById("passageText");
+      const passage = question.passage_text || "";
+      passageBox.classList.toggle("hidden", !passage);
+      passageText.textContent = passage;
       document.getElementById("stem").textContent = question.stem || "No verified question text available.";
       const choices = document.getElementById("choices"); choices.innerHTML = "";
       (question.choices || []).forEach((choice, index) => {

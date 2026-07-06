@@ -45,6 +45,19 @@ def _write_questions_jsonl(data_root: Path, exam_id: str, answers: dict[int, int
     path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
 
 
+def _write_passages_jsonl(data_root: Path, exam_id: str) -> None:
+    path = data_root / "canonical" / exam_id / "passages.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = {
+        "id": f"{exam_id}-passage-001",
+        "exam_id": exam_id,
+        "passage_no": 1,
+        "question_range": [1, 1],
+        "body_text": "Passage text\n\nSecond paragraph",
+    }
+    path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+
 def test_load_answer_key_prefers_answer_key_json(tmp_path: Path) -> None:
     data_root = tmp_path / "data"
     exam_id = "leet-2026-reasoning-even"
@@ -261,6 +274,11 @@ def test_export_feedback_bundle_contains_user_review_not_resolution(tmp_path: Pa
     exam_id = "leet-2026-reasoning-even"
     _write_answer_key(data_root, exam_id, {1: 3})
     _write_questions_jsonl(data_root, exam_id, {1: 3})
+    question_path = data_root / "canonical" / exam_id / "questions.jsonl"
+    question = json.loads(question_path.read_text(encoding="utf-8").splitlines()[0])
+    question["passage_id"] = f"{exam_id}-passage-001"
+    question_path.write_text(json.dumps(question) + "\n", encoding="utf-8")
+    _write_passages_jsonl(data_root, exam_id)
     create_attempt_record("attempt-001", exam_id, "1", data_root=data_root)
     initialize_attempt_reviews("attempt-001", data_root=data_root)
     update_user_self_review(
@@ -275,4 +293,5 @@ def test_export_feedback_bundle_contains_user_review_not_resolution(tmp_path: Pa
 
     assert bundle["artifact_type"] == "leet_practice_attempt_review_feedback_request"
     assert bundle["reviews"][0]["user_self_review"]["reasoning_text"] == "I chose by surface similarity."
+    assert bundle["reviews"][0]["question"]["passage_text"] == "Passage text\n\nSecond paragraph"
     assert "user_resolution" not in bundle["reviews"][0]

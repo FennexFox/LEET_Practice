@@ -17,6 +17,7 @@ def _write_canonical(data_root: Path, exam_id: str) -> None:
         "id": f"{exam_id}-q001",
         "exam_id": exam_id,
         "question_no": 1,
+        "passage_id": f"{exam_id}-passage-001",
         "stem": "Which choice follows?\n\nRead the passage carefully.",
         "choices": [
             {"choice_no": index, "text": f"Choice {index}\nsecond line"}
@@ -25,6 +26,14 @@ def _write_canonical(data_root: Path, exam_id: str) -> None:
         "correct_answer": 3,
     }
     (canonical_dir / "questions.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+    passage = {
+        "id": f"{exam_id}-passage-001",
+        "exam_id": exam_id,
+        "passage_no": 1,
+        "question_range": [1, 1],
+        "body_text": "Passage paragraph one.\n\nPassage paragraph two.",
+    }
+    (canonical_dir / "passages.jsonl").write_text(json.dumps(passage) + "\n", encoding="utf-8")
 
 
 def test_attempt_review_workbench_serves_state_and_updates_review(tmp_path: Path) -> None:
@@ -44,6 +53,8 @@ def test_attempt_review_workbench_serves_state_and_updates_review(tmp_path: Path
         assert "choiceNumber" in root
         assert "white-space: pre-wrap" in root
         assert "choice-text" in root
+        assert "passageBox" in root
+        assert "passage-text" in root
         assert "Full free-form reconstruction" in root
         assert "The direct reason you chose your selected answer" in root
         assert "Your current post-hoc understanding" in root
@@ -53,6 +64,7 @@ def test_attempt_review_workbench_serves_state_and_updates_review(tmp_path: Path
         assert state["wrong_question_numbers"] == [1]
         assert state["reviews"][0]["grading"]["correct_choice"] == 3
         assert state["questions"]["1"]["stem"] == "Which choice follows?\n\nRead the passage carefully."
+        assert state["questions"]["1"]["passage_text"] == "Passage paragraph one.\n\nPassage paragraph two."
         assert state["questions"]["1"]["choices"][0]["text"] == "Choice 1\nsecond line"
 
         request = urllib.request.Request(
