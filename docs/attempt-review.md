@@ -29,6 +29,18 @@ Grade the attempt and create review files for wrong questions:
 leet-practice attempt-review grade attempt-001
 ```
 
+Fix answer-entry mistakes by question number:
+
+```powershell
+leet-practice attempt-review regrade attempt-001 --answer 12=5 --answer 27=3
+```
+
+`regrade` updates only the listed selected answers. If a previously wrong
+question becomes correct, its review file is moved under
+`data/reviews/<attempt_id>/archived/`. If a question remains wrong, existing
+user self-review is preserved. Assistant feedback is cleared when the grading
+for that question changes, because the previous diagnosis may no longer apply.
+
 Open the local browser workbench:
 
 ```powershell

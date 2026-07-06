@@ -44,6 +44,9 @@ def test_attempt_review_workbench_serves_state_and_updates_review(tmp_path: Path
         assert "choiceNumber" in root
         assert "white-space: pre-wrap" in root
         assert "choice-text" in root
+        assert "Full free-form reconstruction" in root
+        assert "The direct reason you chose your selected answer" in root
+        assert "Your current post-hoc understanding" in root
 
         state = json.loads(urllib.request.urlopen(f"{base_url}/api/state", timeout=5).read().decode("utf-8"))
         assert state["score"] == 0

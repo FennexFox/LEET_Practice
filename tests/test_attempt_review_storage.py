@@ -7,12 +7,15 @@ import pytest
 
 from leet_practice.attempt_review import (
     AttemptReviewError,
+    archived_reviews_dir,
     create_attempt_record,
     export_feedback_bundle,
     import_assistant_feedback,
     initialize_attempt_reviews,
     load_answer_key,
     load_review_record,
+    parse_answer_updates,
+    regrade_attempt,
     review_path,
     update_user_self_review,
 )
@@ -108,6 +111,92 @@ def test_create_partial_attempt_allows_short_answer_count(tmp_path: Path) -> Non
     attempt = create_attempt_record("attempt-001", exam_id, "14", data_root=data_root, mode="partial")
 
     assert [answer.question_no for answer in attempt.answers] == [1, 2]
+
+
+def test_parse_answer_updates_accepts_repeated_question_choice_pairs() -> None:
+    assert parse_answer_updates(["2=4", "12:5"]) == {2: 4, 12: 5}
+
+
+def test_parse_answer_updates_rejects_duplicate_question() -> None:
+    with pytest.raises(AttemptReviewError, match="Duplicate"):
+        parse_answer_updates(["2=4", "2=5"])
+
+
+def test_regrade_updates_selected_answers_and_preserves_user_self_review(tmp_path: Path) -> None:
+    data_root = tmp_path / "data"
+    exam_id = "leet-2026-reasoning-even"
+    _write_answer_key(data_root, exam_id, {1: 1, 2: 4, 3: 5})
+    create_attempt_record("attempt-001", exam_id, "125", data_root=data_root)
+    initialize_attempt_reviews("attempt-001", data_root=data_root)
+    update_user_self_review(
+        "attempt-001",
+        2,
+        {"why_selected": "I entered the wrong selected answer.", "status": "ready_for_feedback"},
+        data_root=data_root,
+    )
+    feedback_file = tmp_path / "assistant_feedback.json"
+    feedback_file.write_text(
+        json.dumps(
+            {
+                "reviews": [
+                    {
+                        "question_no": 2,
+                        "assistant_feedback": {
+                            "diagnosis_text": "Stale diagnosis.",
+                            "provisional_error_tags": ["stale"],
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    import_assistant_feedback("attempt-001", feedback_file, data_root=data_root)
+
+    result = regrade_attempt("attempt-001", {2: 3}, data_root=data_root)
+
+    review = load_review_record("attempt-001", 2, data_root=data_root)
+    assert result.wrong_question_numbers == [2]
+    assert review.grading.selected_choice == 3
+    assert review.grading.correct_choice == 4
+    assert review.user_self_review.why_selected == "I entered the wrong selected answer."
+    assert review.assistant_feedback is None
+    assert review.status == AttemptReviewStatus.USER_ENTERED
+
+
+def test_regrade_archives_review_when_question_becomes_correct(tmp_path: Path) -> None:
+    data_root = tmp_path / "data"
+    exam_id = "leet-2026-reasoning-even"
+    _write_answer_key(data_root, exam_id, {1: 1, 2: 4, 3: 5})
+    create_attempt_record("attempt-001", exam_id, "125", data_root=data_root)
+    initialize_attempt_reviews("attempt-001", data_root=data_root)
+    update_user_self_review(
+        "attempt-001",
+        2,
+        {"why_selected": "Typo in answer entry.", "status": "ready_for_feedback"},
+        data_root=data_root,
+    )
+
+    result = regrade_attempt("attempt-001", {2: 4}, data_root=data_root)
+
+    assert result.score == 3
+    assert result.wrong_question_numbers == []
+    assert result.archived_question_numbers == [2]
+    assert not review_path("attempt-001", 2, data_root=data_root).exists()
+    archived_path = archived_reviews_dir("attempt-001", data_root=data_root) / "q002.review.json"
+    assert archived_path.exists()
+    archived = json.loads(archived_path.read_text(encoding="utf-8"))
+    assert archived["user_self_review"]["why_selected"] == "Typo in answer entry."
+
+
+def test_regrade_rejects_unrecorded_question(tmp_path: Path) -> None:
+    data_root = tmp_path / "data"
+    exam_id = "leet-2026-reasoning-even"
+    _write_answer_key(data_root, exam_id, {1: 1, 2: 4, 3: 5})
+    create_attempt_record("attempt-001", exam_id, "125", data_root=data_root)
+
+    with pytest.raises(AttemptReviewError, match="unrecorded"):
+        regrade_attempt("attempt-001", {4: 2}, data_root=data_root)
 
 
 def test_assistant_feedback_import_preserves_user_self_review(tmp_path: Path) -> None:

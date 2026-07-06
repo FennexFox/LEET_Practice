@@ -177,6 +177,42 @@ def attempt_review_grade_command(
     _run_attempt_review_grade(attempt_id, data_root=data_root)
 
 
+def _run_attempt_review_regrade(attempt_id: str, *, data_root: Path, answer_updates: list[str]) -> None:
+    try:
+        parsed_updates = attempt_review_workflow.parse_answer_updates(answer_updates)
+        result = attempt_review_workflow.regrade_attempt(
+            attempt_id,
+            parsed_updates,
+            data_root=data_root,
+        )
+    except attempt_review_workflow.AttemptReviewError as exc:
+        console.print(f"[red]Attempt regrade failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    wrong = ", ".join(str(question_no) for question_no in result.wrong_question_numbers) or "none"
+    archived = ", ".join(str(question_no) for question_no in result.archived_question_numbers) or "none"
+    console.print(f"Answer key: {result.answer_key_source}")
+    console.print(f"Score: {result.score}/{result.total}")
+    console.print(f"Wrong questions: {wrong}")
+    console.print(f"Archived review questions: {archived}")
+    console.print(f"Review directory: {attempt_review_workflow.attempt_reviews_dir(attempt_id, data_root=data_root)}")
+
+
+@attempt_review_app.command("regrade")
+def attempt_review_regrade_command(
+    attempt_id: str = typer.Argument(..., metavar="ATTEMPT_ID", help="Attempt ID."),
+    answer_updates: list[str] = typer.Option(
+        ...,
+        "--answer",
+        "-a",
+        help="Answer correction as QUESTION=CHOICE. Repeat for multiple questions.",
+    ),
+    data_root: Path = typer.Option(DEFAULT_DATA_ROOT, "--data-root", help="Local data root."),
+) -> None:
+    """Update selected answers by question number and recompute review files."""
+
+    _run_attempt_review_regrade(attempt_id, data_root=data_root, answer_updates=answer_updates)
+
+
 def _run_attempt_review_export(attempt_id: str, *, data_root: Path, out_file: Path | None) -> None:
     try:
         path = attempt_review_workflow.export_feedback_bundle(

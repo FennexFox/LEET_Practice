@@ -63,6 +63,18 @@ class AttemptReviewState(BaseModel):
     questions: dict[int, ReviewQuestionContext] = Field(default_factory=dict)
 
 
+class RegradeResult(BaseModel):
+    """Summary of an attempt regrade operation."""
+
+    attempt: AttemptRecord
+    answer_key_source: str
+    score: int
+    total: int
+    wrong_question_numbers: list[int]
+    updated_question_numbers: list[int] = Field(default_factory=list)
+    archived_question_numbers: list[int] = Field(default_factory=list)
+
+
 def attempts_dir(*, data_root: Path = Path("data")) -> Path:
     return data_root / "attempts"
 
@@ -73,6 +85,10 @@ def attempt_path(attempt_id: str, *, data_root: Path = Path("data")) -> Path:
 
 def attempt_reviews_dir(attempt_id: str, *, data_root: Path = Path("data")) -> Path:
     return data_root / "reviews" / attempt_id
+
+
+def archived_reviews_dir(attempt_id: str, *, data_root: Path = Path("data")) -> Path:
+    return attempt_reviews_dir(attempt_id, data_root=data_root) / "archived"
 
 
 def review_path(attempt_id: str, question_no: int, *, data_root: Path = Path("data")) -> Path:
@@ -267,6 +283,23 @@ def parse_answer_string(answers: str) -> list[int]:
     return [int(char) for char in compact]
 
 
+def parse_answer_updates(items: list[str]) -> dict[int, int]:
+    if not items:
+        raise AttemptReviewError("At least one answer update is required.")
+    updates: dict[int, int] = {}
+    for item in items:
+        separator = "=" if "=" in item else ":" if ":" in item else None
+        if separator is None:
+            raise AttemptReviewError(f"Answer update must use QUESTION=CHOICE: {item!r}")
+        question_raw, choice_raw = item.split(separator, 1)
+        question_no = _question_no_from_value(question_raw.strip())
+        choice = _choice_from_value(choice_raw.strip())
+        if question_no in updates:
+            raise AttemptReviewError(f"Duplicate answer update for question {question_no}.")
+        updates[question_no] = choice
+    return updates
+
+
 def create_attempt_record(
     attempt_id: str,
     exam_id: str,
@@ -325,6 +358,16 @@ def save_attempt_record(attempt: AttemptRecord, *, data_root: Path = Path("data"
     return path
 
 
+def _validate_answer_count(attempt: AttemptRecord, answer_count: int, answer_key: AnswerKey) -> None:
+    if attempt.mode != "real":
+        return
+    expected_count = len(answer_key.answers)
+    if answer_count != expected_count:
+        raise AttemptReviewError(
+            f"Real-mode attempt has {answer_count} answer(s), but canonical answer key has {expected_count}."
+        )
+
+
 def grade_attempt(attempt: AttemptRecord, *, data_root: Path = Path("data")) -> tuple[AnswerKey, list[ReviewGrading]]:
     answer_key = load_answer_key(attempt.exam_id, data_root=data_root)
     grading: list[ReviewGrading] = []
@@ -340,6 +383,20 @@ def grade_attempt(attempt: AttemptRecord, *, data_root: Path = Path("data")) -> 
             )
         )
     return answer_key, grading
+
+
+def _has_user_self_review_content(review: AttemptReviewRecord) -> bool:
+    self_review = review.user_self_review
+    return any(
+        [
+            self_review.reasoning_text.strip(),
+            self_review.why_selected.strip(),
+            self_review.decisive_condition.strip(),
+            self_review.why_rejected_correct.strip(),
+            self_review.current_reflection.strip(),
+            self_review.condition_notes.strip(),
+        ]
+    )
 
 
 def _initial_review_from_answer(
@@ -358,6 +415,34 @@ def _initial_review_from_answer(
             correct_choice=correct_choice,
         ),
     )
+
+
+def _active_review_records(attempt_id: str, *, data_root: Path = Path("data")) -> dict[int, AttemptReviewRecord]:
+    review_dir = attempt_reviews_dir(attempt_id, data_root=data_root)
+    if not review_dir.exists():
+        return {}
+    records: dict[int, AttemptReviewRecord] = {}
+    for path in sorted(review_dir.glob("q*.review.json")):
+        try:
+            review = AttemptReviewRecord.model_validate(_read_json(path))
+        except (json.JSONDecodeError, ValidationError) as exc:
+            raise AttemptReviewError(f"Invalid review record {path}: {exc}") from exc
+        records[review.question_no] = review
+    return records
+
+
+def _archive_review_file(attempt_id: str, question_no: int, *, data_root: Path = Path("data")) -> Path | None:
+    source = review_path(attempt_id, question_no, data_root=data_root)
+    if not source.exists():
+        return None
+    archive_dir = archived_reviews_dir(attempt_id, data_root=data_root)
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    destination = archive_dir / source.name
+    if destination.exists():
+        stamp = _now().strftime("%Y%m%d-%H%M%S")
+        destination = archive_dir / f"q{question_no:03d}.{stamp}.review.json"
+    os.replace(source, destination)
+    return destination
 
 
 def load_review_record(
@@ -380,6 +465,106 @@ def save_review_record(review: AttemptReviewRecord, *, data_root: Path = Path("d
     path = review_path(updated.attempt_id, updated.question_no, data_root=data_root)
     _write_json(path, updated.model_dump(mode="json"))
     return path
+
+
+def regrade_attempt(
+    attempt_id: str,
+    answer_updates: dict[int, int],
+    *,
+    data_root: Path = Path("data"),
+) -> RegradeResult:
+    if not answer_updates:
+        raise AttemptReviewError("At least one answer update is required.")
+    with _attempt_review_lock:
+        existing_attempt = load_attempt_record(attempt_id, data_root=data_root)
+        answer_key = load_answer_key(existing_attempt.exam_id, data_root=data_root)
+        existing_by_question = {answer.question_no: answer for answer in existing_attempt.answers}
+        missing_questions = sorted(set(answer_updates) - set(existing_by_question))
+        if missing_questions:
+            raise AttemptReviewError(
+                "Cannot update unrecorded question(s): "
+                + ", ".join(str(question_no) for question_no in missing_questions)
+            )
+        updated_answers = [
+            answer.model_copy(update={"selected_choice": answer_updates.get(answer.question_no, answer.selected_choice)})
+            for answer in existing_attempt.answers
+        ]
+        _validate_answer_count(existing_attempt, len(updated_answers), answer_key)
+        updated_attempt = existing_attempt.model_copy(
+            update={
+                "answers": updated_answers,
+                "updated_at": _now(),
+            }
+        )
+        try:
+            updated_attempt = AttemptRecord.model_validate(updated_attempt.model_dump())
+        except ValidationError as exc:
+            raise AttemptReviewError(f"Invalid regraded attempt record: {exc}") from exc
+        save_attempt_record(updated_attempt, data_root=data_root)
+
+        contexts = load_question_contexts(updated_attempt.exam_id, data_root=data_root)
+        existing_reviews = _active_review_records(attempt_id, data_root=data_root)
+        active_wrong_questions: set[int] = set()
+        updated_questions: list[int] = []
+
+        for answer in updated_attempt.answers:
+            if answer.question_no not in answer_key.answers:
+                raise AttemptReviewError(
+                    f"No canonical answer for question {answer.question_no} in {answer_key.source}."
+                )
+            grading = ReviewGrading(
+                selected_choice=answer.selected_choice,
+                correct_choice=answer_key.answers[answer.question_no],
+            )
+            if grading.is_correct:
+                continue
+            active_wrong_questions.add(answer.question_no)
+            existing_review = existing_reviews.get(answer.question_no)
+            context = contexts.get(answer.question_no)
+            if existing_review is None:
+                review = _initial_review_from_answer(
+                    updated_attempt,
+                    answer,
+                    grading.correct_choice,
+                    context,
+                )
+            else:
+                grading_changed = existing_review.grading != grading
+                patch: dict[str, Any] = {
+                    "exam_id": updated_attempt.exam_id,
+                    "question_id": context.question_id if context else existing_review.question_id,
+                    "grading": grading,
+                    "updated_at": _now(),
+                }
+                if grading_changed:
+                    patch["assistant_feedback"] = None
+                    patch["user_resolution"] = UserResolution()
+                    patch["status"] = (
+                        AttemptReviewStatus.USER_ENTERED
+                        if _has_user_self_review_content(existing_review)
+                        else AttemptReviewStatus.UNREVIEWED
+                    )
+                review = existing_review.model_copy(update=patch)
+            save_review_record(review, data_root=data_root)
+            updated_questions.append(answer.question_no)
+
+        archived_questions: list[int] = []
+        for question_no in sorted(existing_reviews):
+            if question_no in active_wrong_questions:
+                continue
+            if _archive_review_file(attempt_id, question_no, data_root=data_root) is not None:
+                archived_questions.append(question_no)
+
+        wrong_question_numbers = sorted(active_wrong_questions)
+        return RegradeResult(
+            attempt=updated_attempt,
+            answer_key_source=answer_key.source,
+            score=len(updated_attempt.answers) - len(wrong_question_numbers),
+            total=len(updated_attempt.answers),
+            wrong_question_numbers=wrong_question_numbers,
+            updated_question_numbers=sorted(updated_questions),
+            archived_question_numbers=archived_questions,
+        )
 
 
 def initialize_attempt_reviews(
@@ -639,6 +824,7 @@ def workbench_html() -> str:
     .pill.good { background: #e6f4ea; color: #137333; }
     .editor { border-left: 1px solid #d7d7d2; background: #fff; padding: 14px; }
     label { display: block; font-size: 12px; color: #5f6368; margin: 10px 0 4px; }
+    label[title] { cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
     textarea, input, select, button { font: inherit; }
     textarea, input, select { width: 100%; padding: 7px; border: 1px solid #c4c7c5; border-radius: 6px; }
     textarea { min-height: 78px; resize: vertical; }
@@ -661,26 +847,26 @@ def workbench_html() -> str:
       <div id="choices"></div>
     </section>
     <section class="editor">
-      <label>Status</label><select id="status">
+      <label title="Current workflow state for this review. Use ready_for_feedback when your self-review is complete enough to export.">Status</label><select id="status">
         <option value="user_entered">user_entered</option>
         <option value="ready_for_feedback">ready_for_feedback</option>
       </select>
-      <label>Reasoning text</label><textarea id="reasoning_text"></textarea>
-      <label>Why selected</label><textarea id="why_selected"></textarea>
-      <label>Decisive condition, phrase, or step</label><textarea id="decisive_condition"></textarea>
-      <label>Why rejected or missed correct choice</label><textarea id="why_rejected_correct"></textarea>
-      <label>Current reflection</label><textarea id="current_reflection"></textarea>
-      <label>Time pressure / confidence / condition notes</label><textarea id="condition_notes"></textarea>
+      <label title="Full free-form reconstruction of how you solved the question. Write the whole decision process here, even if it overlaps with the focused fields below.">Reasoning text</label><textarea id="reasoning_text"></textarea>
+      <label title="The direct reason you chose your selected answer at the time. Focus on the attraction of that choice, not the whole solution.">Why selected</label><textarea id="why_selected"></textarea>
+      <label title="The exact condition, phrase, comparison, calculation, or step that felt decisive while solving. Quote or name the trigger if possible.">Decisive condition, phrase, or step</label><textarea id="decisive_condition"></textarea>
+      <label title="Why the correct answer did not survive your process. Note what you overlooked, misread, rejected, or failed to verify.">Why rejected or missed correct choice</label><textarea id="why_rejected_correct"></textarea>
+      <label title="Your current post-hoc understanding of the mistake after seeing the correct answer. Keep this as your own reflection, not assistant diagnosis.">Current reflection</label><textarea id="current_reflection"></textarea>
+      <label title="Context that affected performance: time pressure, confidence, fatigue, guessing, marking for review, or test-taking conditions.">Time pressure / confidence / condition notes</label><textarea id="condition_notes"></textarea>
       <div class="actions"><button id="save">Save</button><button id="next">Next</button></div>
       <div class="feedback" id="feedback"></div>
-      <label>Resolution</label><select id="resolution_status">
+      <label title="Your decision about imported assistant feedback after reviewing it.">Resolution</label><select id="resolution_status">
         <option value="pending">pending</option>
         <option value="accepted">accepted</option>
         <option value="edited">edited</option>
         <option value="rejected">rejected</option>
       </select>
-      <label>Final error tags, comma separated</label><input id="final_error_tags">
-      <label>Resolution note</label><textarea id="resolution_note"></textarea>
+      <label title="Final tags you accept after review. These may start from assistant provisional tags, but this field is your resolved version.">Final error tags, comma separated</label><input id="final_error_tags">
+      <label title="Optional note explaining why you accepted, edited, or rejected the assistant feedback.">Resolution note</label><textarea id="resolution_note"></textarea>
       <div class="actions"><button id="saveResolution">Save resolution</button></div>
     </section>
   </main>

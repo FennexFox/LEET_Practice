@@ -38,6 +38,7 @@ The v1 attempt-review workflow keeps this separate from OCR verification:
 ```powershell
 leet-practice attempt-review create attempt-001 leet-2026-reasoning-even --answers "22542 52323"
 leet-practice attempt-review grade attempt-001
+leet-practice attempt-review regrade attempt-001 --answer 12=5 --answer 27=3
 leet-practice attempt-review serve attempt-001
 leet-practice attempt-review feedback-export attempt-001
 leet-practice attempt-review feedback-import attempt-001 --file path/to/assistant_feedback.json
