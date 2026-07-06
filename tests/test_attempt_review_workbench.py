@@ -17,8 +17,11 @@ def _write_canonical(data_root: Path, exam_id: str) -> None:
         "id": f"{exam_id}-q001",
         "exam_id": exam_id,
         "question_no": 1,
-        "stem": "Which choice follows?",
-        "choices": [{"choice_no": index, "text": f"Choice {index}"} for index in range(1, 6)],
+        "stem": "Which choice follows?\n\nRead the passage carefully.",
+        "choices": [
+            {"choice_no": index, "text": f"Choice {index}\nsecond line"}
+            for index in range(1, 6)
+        ],
         "correct_answer": 3,
     }
     (canonical_dir / "questions.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
@@ -39,11 +42,15 @@ def test_attempt_review_workbench_serves_state_and_updates_review(tmp_path: Path
         assert "LEET Attempt Review" in root
         assert "reasoning_text" in root
         assert "choiceNumber" in root
+        assert "white-space: pre-wrap" in root
+        assert "choice-text" in root
 
         state = json.loads(urllib.request.urlopen(f"{base_url}/api/state", timeout=5).read().decode("utf-8"))
         assert state["score"] == 0
         assert state["wrong_question_numbers"] == [1]
         assert state["reviews"][0]["grading"]["correct_choice"] == 3
+        assert state["questions"]["1"]["stem"] == "Which choice follows?\n\nRead the passage carefully."
+        assert state["questions"]["1"]["choices"][0]["text"] == "Choice 1\nsecond line"
 
         request = urllib.request.Request(
             f"{base_url}/api/reviews/1/self-review",

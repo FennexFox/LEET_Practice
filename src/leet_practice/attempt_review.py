@@ -630,8 +630,10 @@ def workbench_html() -> str:
     .queue-item strong { display: block; }
     .queue-item span { color: #5f6368; font-size: 12px; }
     .question { padding: 16px; }
-    .choice { padding: 8px 0; border-bottom: 1px solid #e6e6e2; }
+    #stem { white-space: pre-wrap; line-height: 1.65; overflow-wrap: anywhere; }
+    .choice { display: grid; grid-template-columns: 28px minmax(0, 1fr); padding: 8px 0; border-bottom: 1px solid #e6e6e2; }
     .choice strong { display: inline-block; width: 28px; }
+    .choice-text { white-space: pre-wrap; line-height: 1.55; overflow-wrap: anywhere; }
     .pill { display: inline-block; min-width: 24px; text-align: center; border-radius: 999px; padding: 2px 8px; margin-left: 6px; font-size: 12px; background: #e8eaed; }
     .pill.bad { background: #fce8e6; color: #b3261e; }
     .pill.good { background: #e6f4ea; color: #137333; }
@@ -722,7 +724,9 @@ def workbench_html() -> str:
       const choices = document.getElementById("choices"); choices.innerHTML = "";
       (question.choices || []).forEach((choice, index) => {
         const div = document.createElement("div"); div.className = "choice";
-        div.innerHTML = `<strong>${choiceNumber(choice, index)}</strong>${choiceText(choice)}`;
+        const number = document.createElement("strong"); number.textContent = choiceNumber(choice, index);
+        const text = document.createElement("span"); text.className = "choice-text"; text.textContent = choiceText(choice);
+        div.append(number, text);
         choices.appendChild(div);
       });
       document.getElementById("status").value = current.status === "ready_for_feedback" ? "ready_for_feedback" : "user_entered";
