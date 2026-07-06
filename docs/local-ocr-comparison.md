@@ -96,6 +96,25 @@ leet-practice ocr leet-2026-verbal-even 1-10 `
   --paddle-preimport-paddle
 ```
 
+OCR optimization experiments can tune these options without changing the
+artifact shape:
+
+```powershell
+leet-practice ocr leet-2026-verbal-even 1-10 `
+  --dpi 270 `
+  --ocr-batch-chunk-size 8 `
+  --paddle-text-recognition-batch-size 64 `
+  --paddle-text-det-limit-side-len 3584 `
+  --no-annotated-blocks
+```
+
+`--paddle-text-recognition-batch-size` and
+`--paddle-text-det-limit-side-len` are applied only when the installed
+PaddleOCR constructor supports them. Each run records `requested_options`,
+`effective_options`, and `option_support` under `suggestions.json` `options`
+so benchmark summaries can distinguish requested settings from settings that
+actually reached PaddleOCR.
+
 The tool renders each requested page, splits it into left and right content
 blocks, runs PaddleOCR for those blocks, and builds a virtual reading stream:
 
@@ -164,6 +183,26 @@ page/column preparation, OCR, stream construction, anchor detection, candidate
 crop and preview generation, annotated block generation, payload construction,
 and total runtime. The command summary prints the same timing fields. Preview
 stitching and candidate crop image work are included in `candidate_crops_seconds`.
+
+To compare completed runs, summarize one baseline and one or more candidate
+`suggestions.json` files:
+
+```powershell
+leet-practice ocr-benchmark-summary `
+  artifacts/question_crop_suggestions/baseline/suggestions.json `
+  --candidate artifacts/question_crop_suggestions/candidate/suggestions.json `
+  --out-dir artifacts/ocr_benchmarks/my-run
+```
+
+The summary writes JSON and CSV records with `ocr_seconds`, `total_seconds`,
+requested/effective PaddleOCR options, support flags, page-level row and
+character counts, normalized text similarity warnings/failures, and anchor
+sequence checks.
+
+Treat CLI-only tuning and default changes separately. A CLI-only recommendation
+can be made after the primary benchmark passes. A default change, especially to
+`--dpi` or `--paddle-text-det-limit-side-len`, must also pass at least one
+cross-exam smoke benchmark before becoming the default.
 
 The tool processes pages incrementally. If a run is interrupted, it writes a
 partial `suggestions.json` for completed OCR blocks when possible and marks it

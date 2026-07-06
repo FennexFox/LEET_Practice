@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 def _load_suggest_question_crops():
     tools_dir = Path(__file__).resolve().parents[1] / "tools"
@@ -95,6 +97,8 @@ def _ocr_args(**overrides):
         "paddle_cpu_threads": 4,
         "paddle_disable_mkldnn": True,
         "paddle_text_recognition_batch_size": 32,
+        "paddle_text_det_limit_side_len": None,
+        "ocr_batch_chunk_size": 4,
         "paddle_disable_pir": True,
         "paddle_disable_doc_preprocess": True,
         "include_raw_paddle_payload": False,
@@ -217,10 +221,9 @@ def test_run_ocr_for_blocks_batches_in_progress_chunks(tmp_path: Path, monkeypat
             for path in image_paths
         ]
 
-    monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "OCR_BATCH_PROGRESS_CHUNK_SIZE", 2)
     monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "run_paddleocr_batch", fake_batch)
 
-    ocr_blocks, errors, interrupted = module.run_ocr_for_blocks(raw_blocks, _ocr_args(), tmp_path)
+    ocr_blocks, errors, interrupted = module.run_ocr_for_blocks(raw_blocks, _ocr_args(ocr_batch_chunk_size=2), tmp_path)
 
     assert errors == []
     assert interrupted is False
@@ -236,6 +239,14 @@ def test_run_ocr_for_blocks_batches_in_progress_chunks(tmp_path: Path, monkeypat
         "page_004_left",
         "page_005_left",
     ]
+
+
+def test_run_ocr_for_blocks_rejects_non_positive_batch_chunk_size(tmp_path: Path) -> None:
+    module = _load_suggest_question_crops()
+    raw_blocks = [_raw_block(module, index, index + 1, "left", tmp_path) for index in range(2)]
+
+    with pytest.raises(ValueError, match="ocr_batch_chunk_size"):
+        module.run_ocr_for_blocks(raw_blocks, _ocr_args(ocr_batch_chunk_size=0), tmp_path)
 
 
 def test_run_ocr_for_blocks_falls_back_only_for_remaining_chunk_after_batch_failure(
@@ -260,11 +271,10 @@ def test_run_ocr_for_blocks_falls_back_only_for_remaining_chunk_after_batch_fail
         single_calls.append(Path(block["image_path"]).name)
         return ([{"text": Path(block["image_path"]).stem, "confidence": 1.0}], None)
 
-    monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "OCR_BATCH_PROGRESS_CHUNK_SIZE", 2)
     monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "run_paddleocr_batch", fake_batch)
     monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "run_ocr_for_block", fake_single)
 
-    ocr_blocks, errors, interrupted = module.run_ocr_for_blocks(raw_blocks, _ocr_args(), tmp_path)
+    ocr_blocks, errors, interrupted = module.run_ocr_for_blocks(raw_blocks, _ocr_args(ocr_batch_chunk_size=2), tmp_path)
 
     assert errors == []
     assert interrupted is False
@@ -303,10 +313,9 @@ def test_run_ocr_for_blocks_preserves_completed_batch_chunks_after_keyboard_inte
             for path in image_paths
         ]
 
-    monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "OCR_BATCH_PROGRESS_CHUNK_SIZE", 2)
     monkeypatch.setitem(module.run_ocr_for_blocks.__globals__, "run_paddleocr_batch", fake_batch)
 
-    ocr_blocks, errors, interrupted = module.run_ocr_for_blocks(raw_blocks, _ocr_args(), tmp_path)
+    ocr_blocks, errors, interrupted = module.run_ocr_for_blocks(raw_blocks, _ocr_args(ocr_batch_chunk_size=2), tmp_path)
 
     assert errors == []
     assert interrupted is True
@@ -409,6 +418,8 @@ def test_build_stream_preserves_partial_ocr_blocks_after_keyboard_interrupt(tmp_
         paddle_cpu_threads=4,
         paddle_disable_mkldnn=True,
         paddle_text_recognition_batch_size=None,
+        paddle_text_det_limit_side_len=None,
+        ocr_batch_chunk_size=4,
         paddle_disable_pir=True,
         paddle_disable_doc_preprocess=True,
         paddle_preimport_torch=True,
@@ -448,6 +459,8 @@ def test_suggestions_payload_top_level_schema_is_stable(tmp_path: Path) -> None:
         paddle_cpu_threads=4,
         paddle_disable_mkldnn=True,
         paddle_text_recognition_batch_size=None,
+        paddle_text_det_limit_side_len=None,
+        ocr_batch_chunk_size=4,
         paddle_disable_pir=True,
         paddle_disable_doc_preprocess=True,
         paddle_preimport_torch=True,

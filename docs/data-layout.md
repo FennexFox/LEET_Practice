@@ -139,6 +139,11 @@ Example:
 data/attempts/2026-06-30-leet-2026-verbal-even.json
 ```
 
+The v1 attempt-review workflow stores selected answers here independently from
+canonical question data. The attempt file is the source for what the user chose;
+canonical `answer_key.json` or `questions.jsonl` remains the source for official
+answers.
+
 ### `data/reviews/`
 
 Wrong-answer reviews and evidence bundles.
@@ -146,7 +151,7 @@ Wrong-answer reviews and evidence bundles.
 Example:
 
 ```text
-data/reviews/leet-2026-verbal-even/q014/
+data/reviews/leet-2026-verbal-even/q14/
   source/
     question_crop.png
     passage_crop.png
@@ -155,6 +160,50 @@ data/reviews/leet-2026-verbal-even/q014/
     verified_text.md
   review.json
 ```
+
+For attempt self-review, use the attempt ID as the first path component:
+
+```text
+data/reviews/<attempt_id>/
+  q14.review.json
+  q21.review.json
+  feedback_request.json
+```
+
+Each `qNN.review.json` keeps user and assistant layers separate:
+
+```json
+{
+  "grading": {
+    "selected_choice": 1,
+    "correct_choice": 4,
+    "is_correct": false
+  },
+  "user_self_review": {
+    "reasoning_text": "",
+    "current_reflection": "",
+    "memory_confidence": "partial",
+    "created_by": "user"
+  },
+  "assistant_feedback": {
+    "diagnosis_text": "",
+    "evidence": [],
+    "provisional_error_tags": [],
+    "correction_rule": "",
+    "created_by": "assistant"
+  },
+  "user_resolution": {
+    "status": "pending",
+    "final_error_tags": [],
+    "note": null,
+    "created_by": "user"
+  }
+}
+```
+
+Assistant imports must not overwrite `user_self_review`. Provisional tags are
+assistant suggestions only until the user accepts or edits them in
+`user_resolution`.
 
 ## Evidence bundle principle
 

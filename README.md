@@ -33,6 +33,22 @@ The project is designed around one principle: **the core learning data is not on
    - correction rule
 6. Use accumulated review records to identify repeated patterns.
 
+The v1 attempt-review workflow keeps this separate from OCR verification:
+
+```powershell
+leet-practice attempt-review create attempt-001 leet-2026-reasoning-even --answers "22542 52323"
+leet-practice attempt-review grade attempt-001
+leet-practice attempt-review regrade attempt-001 --answer 12=5 --answer 27=3
+leet-practice attempt-review serve attempt-001
+leet-practice attempt-review feedback-export attempt-001
+leet-practice attempt-review feedback-import attempt-001 --file path/to/assistant_feedback.json
+```
+
+Attempt answers are stored in `data/attempts/<attempt_id>.json`. Wrong-answer
+self-review records are stored as `data/reviews/<attempt_id>/qXXX.review.json`
+with separate nested user self-review, assistant feedback, and user resolution
+fields.
+
 ## Data policy
 
 The repository tracks code, schemas, documentation, and empty directory placeholders. It intentionally does **not** track local PDFs, rendered page images, OCR artifacts, extracted copyrighted text, personal attempts, or review notes by default.
@@ -41,6 +57,8 @@ See [`docs/data-layout.md`](docs/data-layout.md) for the intended local director
 See [`docs/verification-workbench.md`](docs/verification-workbench.md) for the
 planned human verification interface that promotes OCR crop suggestions into
 verified passage and question data.
+See [`docs/attempt-review.md`](docs/attempt-review.md) for the attempt
+self-review and assistant feedback handoff workflow.
 
 ## Initial directory map
 

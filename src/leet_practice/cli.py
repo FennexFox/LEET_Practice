@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from ipaddress import ip_address
 from pathlib import Path
 
@@ -9,7 +10,9 @@ import typer
 from rich.console import Console
 
 from leet_practice import __version__
+from leet_practice import attempt_review as attempt_review_workflow
 from leet_practice import ocr_crops
+from leet_practice.ocr_benchmark import benchmark_record, write_benchmark_summary
 from leet_practice.verification import (
     VerificationError,
     initialize_review_state,
@@ -19,6 +22,7 @@ from leet_practice.verification import (
 )
 
 app = typer.Typer(help="Local-first LEET practice and wrong-answer review tools.")
+attempt_review_app = typer.Typer(help="Attempt grading, self-review, and assistant feedback handoff.")
 console = Console()
 DEFAULT_DATA_ROOT = Path("data")
 DEFAULT_ARTIFACTS_ROOT = Path("artifacts/question_crop_suggestions")
@@ -100,6 +104,251 @@ def scaffold_info() -> None:
     console.print("- data/reviews/: wrong-answer reviews")
 
 
+def _run_attempt_review_create(
+    attempt_id: str,
+    exam_id: str,
+    answers: str,
+    *,
+    data_root: Path,
+    mode: str,
+    notes: str | None,
+    overwrite: bool,
+) -> None:
+    try:
+        attempt = attempt_review_workflow.create_attempt_record(
+            attempt_id,
+            exam_id,
+            answers,
+            data_root=data_root,
+            mode=mode,
+            notes=notes,
+            overwrite=overwrite,
+        )
+    except attempt_review_workflow.AttemptReviewError as exc:
+        console.print(f"[red]Attempt creation failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    console.print(f"Attempt: {attempt_review_workflow.attempt_path(attempt.id, data_root=data_root)}")
+    console.print(f"Answers: {len(attempt.answers)}")
+
+
+@attempt_review_app.command("create")
+def attempt_review_create_command(
+    attempt_id: str = typer.Argument(..., metavar="ATTEMPT_ID", help="Attempt ID to store under data/attempts/."),
+    exam_id: str = typer.Argument(..., metavar="EXAM_ID", help="Canonical exam ID."),
+    answers: str = typer.Option(..., "--answers", help='Answer string, for example "22542 52323".'),
+    data_root: Path = typer.Option(DEFAULT_DATA_ROOT, "--data-root", help="Local data root."),
+    mode: str = typer.Option("real", "--mode", help="Attempt mode: real, review, or partial."),
+    notes: str | None = typer.Option(None, "--notes", help="Optional attempt note."),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite an existing attempt record."),
+) -> None:
+    """Create an attempt record from a selected-answer string."""
+
+    _run_attempt_review_create(
+        attempt_id,
+        exam_id,
+        answers,
+        data_root=data_root,
+        mode=mode,
+        notes=notes,
+        overwrite=overwrite,
+    )
+
+
+def _run_attempt_review_grade(attempt_id: str, *, data_root: Path) -> None:
+    try:
+        state = attempt_review_workflow.initialize_attempt_reviews(attempt_id, data_root=data_root)
+    except attempt_review_workflow.AttemptReviewError as exc:
+        console.print(f"[red]Attempt grading failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    console.print(f"Answer key: {state.answer_key_source}")
+    console.print(f"Score: {state.score}/{state.total}")
+    wrong = ", ".join(str(question_no) for question_no in state.wrong_question_numbers) or "none"
+    console.print(f"Wrong questions: {wrong}")
+    console.print(f"Review directory: {attempt_review_workflow.attempt_reviews_dir(attempt_id, data_root=data_root)}")
+
+
+@attempt_review_app.command("grade")
+def attempt_review_grade_command(
+    attempt_id: str = typer.Argument(..., metavar="ATTEMPT_ID", help="Attempt ID."),
+    data_root: Path = typer.Option(DEFAULT_DATA_ROOT, "--data-root", help="Local data root."),
+) -> None:
+    """Grade an attempt and create review files for wrong answers."""
+
+    _run_attempt_review_grade(attempt_id, data_root=data_root)
+
+
+def _run_attempt_review_regrade(attempt_id: str, *, data_root: Path, answer_updates: list[str]) -> None:
+    try:
+        parsed_updates = attempt_review_workflow.parse_answer_updates(answer_updates)
+        result = attempt_review_workflow.regrade_attempt(
+            attempt_id,
+            parsed_updates,
+            data_root=data_root,
+        )
+    except attempt_review_workflow.AttemptReviewError as exc:
+        console.print(f"[red]Attempt regrade failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    wrong = ", ".join(str(question_no) for question_no in result.wrong_question_numbers) or "none"
+    archived = ", ".join(str(question_no) for question_no in result.archived_question_numbers) or "none"
+    console.print(f"Answer key: {result.answer_key_source}")
+    console.print(f"Score: {result.score}/{result.total}")
+    console.print(f"Wrong questions: {wrong}")
+    console.print(f"Archived review questions: {archived}")
+    console.print(f"Review directory: {attempt_review_workflow.attempt_reviews_dir(attempt_id, data_root=data_root)}")
+
+
+@attempt_review_app.command("regrade")
+def attempt_review_regrade_command(
+    attempt_id: str = typer.Argument(..., metavar="ATTEMPT_ID", help="Attempt ID."),
+    answer_updates: list[str] = typer.Option(
+        ...,
+        "--answer",
+        "-a",
+        help="Answer correction as QUESTION=CHOICE. Repeat for multiple questions.",
+    ),
+    data_root: Path = typer.Option(DEFAULT_DATA_ROOT, "--data-root", help="Local data root."),
+) -> None:
+    """Update selected answers by question number and recompute review files."""
+
+    _run_attempt_review_regrade(attempt_id, data_root=data_root, answer_updates=answer_updates)
+
+
+def _run_attempt_review_migrate_self_review(*, data_root: Path) -> None:
+    try:
+        result = attempt_review_workflow.migrate_self_review_files(data_root=data_root)
+    except attempt_review_workflow.AttemptReviewError as exc:
+        console.print(f"[red]Self-review migration failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    console.print(f"Scanned review files: {result.scanned}")
+    console.print(f"Migrated review files: {result.migrated}")
+
+
+@attempt_review_app.command("migrate-self-review")
+def attempt_review_migrate_self_review_command(
+    data_root: Path = typer.Option(DEFAULT_DATA_ROOT, "--data-root", help="Local data root."),
+) -> None:
+    """Migrate legacy user self-review fields into the simplified schema."""
+
+    _run_attempt_review_migrate_self_review(data_root=data_root)
+
+
+def _run_attempt_review_export(attempt_id: str, *, data_root: Path, out_file: Path | None) -> None:
+    try:
+        path = attempt_review_workflow.export_feedback_bundle(
+            attempt_id,
+            data_root=data_root,
+            out_file=out_file,
+        )
+    except attempt_review_workflow.AttemptReviewError as exc:
+        console.print(f"[red]Feedback export failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    console.print(f"Feedback request: {path}")
+
+
+@attempt_review_app.command("feedback-export")
+def attempt_review_feedback_export_command(
+    attempt_id: str = typer.Argument(..., metavar="ATTEMPT_ID", help="Attempt ID."),
+    data_root: Path = typer.Option(DEFAULT_DATA_ROOT, "--data-root", help="Local data root."),
+    out_file: Path | None = typer.Option(None, "--out-file", help="Output feedback request JSON path."),
+) -> None:
+    """Write a local bundle for assistant feedback."""
+
+    _run_attempt_review_export(attempt_id, data_root=data_root, out_file=out_file)
+
+
+def _run_attempt_review_import(attempt_id: str, *, data_root: Path, feedback_file: Path) -> None:
+    try:
+        reviews = attempt_review_workflow.import_assistant_feedback(
+            attempt_id,
+            feedback_file,
+            data_root=data_root,
+        )
+    except attempt_review_workflow.AttemptReviewError as exc:
+        console.print(f"[red]Feedback import failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    console.print(f"Imported assistant feedback for {len(reviews)} review(s).")
+
+
+@attempt_review_app.command("feedback-import")
+def attempt_review_feedback_import_command(
+    attempt_id: str = typer.Argument(..., metavar="ATTEMPT_ID", help="Attempt ID."),
+    feedback_file: Path = typer.Option(..., "--file", exists=True, help="Assistant feedback JSON file."),
+    data_root: Path = typer.Option(DEFAULT_DATA_ROOT, "--data-root", help="Local data root."),
+) -> None:
+    """Import assistant feedback without overwriting user self-review."""
+
+    _run_attempt_review_import(attempt_id, data_root=data_root, feedback_file=feedback_file)
+
+
+def _run_attempt_review_serve(
+    attempt_id: str,
+    *,
+    data_root: Path,
+    host: str,
+    port: int,
+    no_open: bool,
+    unsafe_allow_remote: bool,
+) -> None:
+    if not _is_loopback_host(host) and not unsafe_allow_remote:
+        console.print(
+            "[red]Refusing to bind the unauthenticated workbench to a non-loopback host.[/red]\n"
+            "Use --unsafe-allow-remote only on a trusted network."
+        )
+        raise typer.Exit(1)
+    try:
+        state = attempt_review_workflow.initialize_attempt_reviews(attempt_id, data_root=data_root)
+    except attempt_review_workflow.AttemptReviewError as exc:
+        console.print(f"[red]Attempt review setup failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    console.print(f"Attempt: {attempt_review_workflow.attempt_path(attempt_id, data_root=data_root)}")
+    console.print(f"Review directory: {attempt_review_workflow.attempt_reviews_dir(attempt_id, data_root=data_root)}")
+    console.print(f"Wrong questions: {len(state.wrong_question_numbers)}")
+    url = f"http://{host}:{port}/"
+    console.print(f"Starting local attempt-review workbench: {url}")
+    console.print("Press Ctrl+C to stop.")
+    try:
+        attempt_review_workflow.serve_review_workbench(
+            attempt_id,
+            data_root=data_root,
+            host=host,
+            port=port,
+            open_browser=not no_open,
+        )
+    except KeyboardInterrupt:
+        console.print("\nStopped attempt-review workbench.")
+    except OSError as exc:
+        console.print(f"[red]Failed to start workbench:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+
+@attempt_review_app.command("serve")
+def attempt_review_serve_command(
+    attempt_id: str = typer.Argument(..., metavar="ATTEMPT_ID", help="Attempt ID."),
+    data_root: Path = typer.Option(DEFAULT_DATA_ROOT, "--data-root", help="Local data root."),
+    host: str = typer.Option("127.0.0.1", "--host", help="Local bind host."),
+    port: int = typer.Option(8766, "--port", help="Local bind port."),
+    no_open: bool = typer.Option(False, "--no-open", help="Do not open the browser automatically."),
+    unsafe_allow_remote: bool = typer.Option(
+        False,
+        "--unsafe-allow-remote",
+        help="Allow binding the unauthenticated workbench to a non-loopback host.",
+    ),
+) -> None:
+    """Serve the separate attempt self-review workbench."""
+
+    _run_attempt_review_serve(
+        attempt_id,
+        data_root=data_root,
+        host=host,
+        port=port,
+        no_open=no_open,
+        unsafe_allow_remote=unsafe_allow_remote,
+    )
+
+
+app.add_typer(attempt_review_app, name="attempt-review")
+
+
 def _run_ocr(
     exam_id: str,
     pages: str,
@@ -108,8 +357,13 @@ def _run_ocr(
     data_root: Path,
     out_dir: Path,
     run_id: str | None,
+    dpi: int,
+    reuse_existing_images: bool,
+    no_annotated_blocks: bool,
+    ocr_batch_chunk_size: int,
     paddle_device: str | None,
     paddle_text_recognition_batch_size: int | None,
+    paddle_text_det_limit_side_len: int | None,
     paddle_preimport_paddle: bool,
 ) -> None:
     pdf_path = pdf or _default_pdf_path(exam_id, data_root)
@@ -135,11 +389,21 @@ def _run_ocr(
         str(out_dir),
         "--run-id",
         actual_run_id,
+        "--dpi",
+        str(dpi),
+        "--ocr-batch-chunk-size",
+        str(ocr_batch_chunk_size),
     ]
+    if reuse_existing_images:
+        argv.append("--reuse-existing-images")
+    if no_annotated_blocks:
+        argv.append("--no-annotated-blocks")
     if paddle_device:
         argv.extend(["--paddle-device", paddle_device])
     if paddle_text_recognition_batch_size is not None:
         argv.extend(["--paddle-text-recognition-batch-size", str(paddle_text_recognition_batch_size)])
+    if paddle_text_det_limit_side_len is not None:
+        argv.extend(["--paddle-text-det-limit-side-len", str(paddle_text_det_limit_side_len)])
     if paddle_preimport_paddle:
         argv.append("--paddle-preimport-paddle")
 
@@ -160,11 +424,25 @@ def ocr_command(
     data_root: Path = typer.Option(DEFAULT_DATA_ROOT, "--data-root", help="Local data root used for the default PDF path."),
     out_dir: Path = typer.Option(DEFAULT_ARTIFACTS_ROOT, "--out-dir", help="Directory where candidate suggestions are written."),
     run_id: str | None = typer.Option(None, "--run-id", help="Output run directory name. Defaults to EXAM_ID plus page range."),
+    dpi: int = typer.Option(300, "--dpi", min=1, help="PDF render DPI."),
+    reuse_existing_images: bool = typer.Option(
+        False,
+        "--reuse-existing-images",
+        help="Reuse rendered page and column PNGs already present in the run directory.",
+    ),
+    no_annotated_blocks: bool = typer.Option(False, "--no-annotated-blocks", help="Skip annotated page-column images."),
+    ocr_batch_chunk_size: int = typer.Option(4, "--ocr-batch-chunk-size", min=1, help="Page-column blocks per OCR batch chunk."),
     paddle_device: str | None = typer.Option(None, "--paddle-device", help="Optional PaddleOCR device, for example cpu or gpu:0."),
     paddle_text_recognition_batch_size: int | None = typer.Option(
         None,
         "--paddle-text-recognition-batch-size",
         help="Optional PaddleOCR text-recognition batch size.",
+    ),
+    paddle_text_det_limit_side_len: int | None = typer.Option(
+        None,
+        "--paddle-text-det-limit-side-len",
+        min=1,
+        help="Optional PaddleOCR text detection max side length.",
     ),
     paddle_preimport_paddle: bool = typer.Option(
         False,
@@ -181,10 +459,55 @@ def ocr_command(
         data_root=data_root,
         out_dir=out_dir,
         run_id=run_id,
+        dpi=dpi,
+        reuse_existing_images=reuse_existing_images,
+        no_annotated_blocks=no_annotated_blocks,
+        ocr_batch_chunk_size=ocr_batch_chunk_size,
         paddle_device=paddle_device,
         paddle_text_recognition_batch_size=paddle_text_recognition_batch_size,
+        paddle_text_det_limit_side_len=paddle_text_det_limit_side_len,
         paddle_preimport_paddle=paddle_preimport_paddle,
     )
+
+
+@app.command("ocr-benchmark-summary")
+def ocr_benchmark_summary_command(
+    baseline: Path = typer.Argument(..., exists=True, help="Baseline suggestions.json path."),
+    candidate: list[Path] = typer.Option(
+        [],
+        "--candidate",
+        exists=True,
+        help="Candidate suggestions.json path. Repeat for multiple candidates.",
+    ),
+    baseline_kind: str = typer.Option("cold", "--baseline-kind", help="Run kind label for the baseline, for example cold or warm."),
+    candidate_kind: str = typer.Option("warm", "--candidate-kind", help="Run kind label for candidates, for example warm."),
+    out_dir: Path = typer.Option(
+        Path("artifacts/ocr_benchmarks"),
+        "--out-dir",
+        help="Directory where summary.json and summary.csv are written.",
+    ),
+) -> None:
+    """Summarize OCR benchmark results from suggestion artifacts."""
+
+    try:
+        baseline_payload = json.loads(baseline.read_text(encoding="utf-8"))
+        records = [benchmark_record(name=baseline.parent.name, run_kind=baseline_kind, payload=baseline_payload)]
+        for path in candidate:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            records.append(
+                benchmark_record(
+                    name=path.parent.name,
+                    run_kind=candidate_kind,
+                    payload=payload,
+                    baseline_payload=baseline_payload,
+                )
+            )
+        json_path, csv_path = write_benchmark_summary(records, out_dir)
+    except (json.JSONDecodeError, ValueError, KeyError) as exc:
+        console.print(f"[red]OCR benchmark summary failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    console.print(f"Benchmark summary: {json_path}")
+    console.print(f"Benchmark CSV: {csv_path}")
 
 
 def _run_review_crops(
