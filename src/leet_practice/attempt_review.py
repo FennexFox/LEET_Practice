@@ -184,6 +184,73 @@ def _answer_from_mapping_item(item: dict[str, Any]) -> tuple[int, int] | None:
     return _question_no_from_value(question_no_raw), _choice_from_value(answer_raw)
 
 
+def _canonical_question_invariant_error(
+    *,
+    row: dict[str, Any],
+    fallback_exam_id: str | None,
+    correct_answer: Any,
+    inferred_correct_choices: list[int],
+) -> AttemptReviewError:
+    exam_id = row.get("exam_id") or fallback_exam_id or "<unknown>"
+    question_no = row.get("question_no", row.get("number", row.get("question", "<unknown>")))
+    inferred: int | list[int] | None
+    if len(inferred_correct_choices) == 1:
+        inferred = inferred_correct_choices[0]
+    elif inferred_correct_choices:
+        inferred = inferred_correct_choices
+    else:
+        inferred = None
+    return AttemptReviewError(
+        "Canonical question answer invariant violated: "
+        f"exam_id={exam_id!r}, question_no={question_no!r}, "
+        f"correct_answer={correct_answer!r}, correct_choice_from_choices={inferred!r}"
+    )
+
+
+def validate_canonical_question_row(row: dict[str, Any], *, exam_id: str | None = None) -> None:
+    """Validate canonical answer metadata embedded in a question row."""
+    if "choices" not in row or row["choices"] is None:
+        return
+    choices = row["choices"]
+    if not isinstance(choices, list):
+        raise _canonical_question_invariant_error(
+            row=row,
+            fallback_exam_id=exam_id,
+            correct_answer=row.get("correct_answer"),
+            inferred_correct_choices=[],
+        )
+
+    correct_choices: list[int] = []
+    for choice in choices:
+        if not isinstance(choice, dict):
+            raise _canonical_question_invariant_error(
+                row=row,
+                fallback_exam_id=exam_id,
+                correct_answer=row.get("correct_answer"),
+                inferred_correct_choices=correct_choices,
+            )
+        if choice.get("is_correct") is True:
+            correct_choices.append(_choice_from_value(choice.get("choice_no")))
+
+    if len(correct_choices) != 1:
+        raise _canonical_question_invariant_error(
+            row=row,
+            fallback_exam_id=exam_id,
+            correct_answer=row.get("correct_answer"),
+            inferred_correct_choices=correct_choices,
+        )
+
+    if "correct_answer" in row and row["correct_answer"] is not None:
+        correct_answer = _choice_from_value(row["correct_answer"])
+        if correct_answer != correct_choices[0]:
+            raise _canonical_question_invariant_error(
+                row=row,
+                fallback_exam_id=exam_id,
+                correct_answer=correct_answer,
+                inferred_correct_choices=correct_choices,
+            )
+
+
 def _parse_answer_payload(payload: Any) -> dict[int, int]:
     if isinstance(payload, list):
         answers: dict[int, int] = {}
@@ -254,7 +321,8 @@ def load_question_contexts(exam_id: str, *, data_root: Path = Path("data")) -> d
         try:
             row = json.loads(line)
             question_no = _question_no_from_value(row["question_no"])
-        except (KeyError, json.JSONDecodeError, ValueError) as exc:
+            validate_canonical_question_row(row, exam_id=exam_id)
+        except (KeyError, json.JSONDecodeError, ValueError, AttemptReviewError) as exc:
             raise AttemptReviewError(f"Invalid questions.jsonl row {line_no}: {exc}") from exc
         contexts[question_no] = ReviewQuestionContext(
             question_no=question_no,
@@ -277,8 +345,9 @@ def _load_questions_answers(exam_id: str, *, data_root: Path = Path("data")) -> 
             continue
         try:
             row = json.loads(line)
+            validate_canonical_question_row(row, exam_id=exam_id)
             parsed = _answer_from_mapping_item(row)
-        except (json.JSONDecodeError, ValueError) as exc:
+        except (json.JSONDecodeError, ValueError, AttemptReviewError) as exc:
             raise AttemptReviewError(f"Invalid questions.jsonl row {line_no}: {exc}") from exc
         if parsed is None:
             continue

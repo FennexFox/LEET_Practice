@@ -14,13 +14,13 @@ def _write_canonical(data_root: Path, exam_id: str) -> None:
     canonical_dir.mkdir(parents=True)
     (canonical_dir / "answer_key.json").write_text(json.dumps({"answers": {"1": 3}}), encoding="utf-8")
     row = {
-        "id": f"{exam_id}-q001",
+        "id": f"{exam_id}-q01",
         "exam_id": exam_id,
         "question_no": 1,
         "passage_id": f"{exam_id}-passage-001",
         "stem": "Which choice follows?\n\nRead the passage carefully.",
         "choices": [
-            {"choice_no": index, "text": f"Choice {index}\nsecond line"}
+            {"choice_no": index, "text": f"Choice {index}\nsecond line", "is_correct": index == 3}
             for index in range(1, 6)
         ],
         "correct_answer": 3,

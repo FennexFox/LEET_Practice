@@ -38,7 +38,10 @@ def _write_questions_jsonl(data_root: Path, exam_id: str, answers: dict[int, int
             "exam_id": exam_id,
             "question_no": question_no,
             "stem": f"Question {question_no}",
-            "choices": [{"choice_no": index, "text": f"Choice {index}"} for index in range(1, 6)],
+            "choices": [
+                {"choice_no": index, "text": f"Choice {index}", "is_correct": index == answer}
+                for index in range(1, 6)
+            ],
             "correct_answer": answer,
         }
         for question_no, answer in sorted(answers.items())
@@ -80,6 +83,41 @@ def test_load_answer_key_uses_questions_jsonl_fallback(tmp_path: Path) -> None:
 
     assert answer_key.answers == {1: 2, 2: 4}
     assert answer_key.source.endswith("questions.jsonl")
+
+
+def test_load_answer_key_validates_matching_question_choice_metadata(tmp_path: Path) -> None:
+    data_root = tmp_path / "data"
+    exam_id = "leet-2026-reasoning-even"
+    _write_questions_jsonl(data_root, exam_id, {1: 5})
+
+    answer_key = load_answer_key(exam_id, data_root=data_root)
+
+    assert answer_key.answers == {1: 5}
+
+
+def test_load_answer_key_errors_when_question_choice_metadata_disagrees(tmp_path: Path) -> None:
+    data_root = tmp_path / "data"
+    exam_id = "leet-2026-reasoning-even"
+    path = data_root / "canonical" / exam_id / "questions.jsonl"
+    path.parent.mkdir(parents=True)
+    row = {
+        "id": f"{exam_id}-q03",
+        "exam_id": exam_id,
+        "question_no": 3,
+        "stem": "Question 3",
+        "choices": [
+            {"choice_no": index, "text": f"Choice {index}", "is_correct": index == 5}
+            for index in range(1, 6)
+        ],
+        "correct_answer": 4,
+    }
+    path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    with pytest.raises(
+        AttemptReviewError,
+        match=r"exam_id='leet-2026-reasoning-even'.*question_no=3.*correct_answer=4.*correct_choice_from_choices=5",
+    ):
+        load_answer_key(exam_id, data_root=data_root)
 
 
 def test_load_answer_key_errors_when_sources_disagree(tmp_path: Path) -> None:

@@ -63,7 +63,7 @@ Example:
 data/ocr/leet-2026-verbal-even/
   page_001_left.paddleocr.txt
   page_001_left.paddleocr.json
-  q001_ocr_raw.txt
+  q01_ocr_raw.txt
 ```
 
 OCR output is never treated as final truth. It must be reviewed before becoming verified text.
