@@ -216,7 +216,7 @@ def test_regrade_archives_review_when_question_becomes_correct(tmp_path: Path) -
     assert result.wrong_question_numbers == []
     assert result.archived_question_numbers == [2]
     assert not review_path("attempt-001", 2, data_root=data_root).exists()
-    archived_path = archived_reviews_dir("attempt-001", data_root=data_root) / "q002.review.json"
+    archived_path = archived_reviews_dir("attempt-001", data_root=data_root) / "q02.review.json"
     assert archived_path.exists()
     archived = json.loads(archived_path.read_text(encoding="utf-8"))
     assert archived["user_self_review"]["reasoning_text"] == "Typo in answer entry."
@@ -362,7 +362,7 @@ def test_migrate_self_review_merges_legacy_fields_and_preserves_feedback(tmp_pat
     data_root = tmp_path / "data"
     review_dir = data_root / "reviews" / "attempt-001"
     review_dir.mkdir(parents=True)
-    path = review_dir / "q001.review.json"
+    path = review_dir / "q01.review.json"
     payload = {
         "attempt_id": "attempt-001",
         "exam_id": "leet-2026-reasoning-even",

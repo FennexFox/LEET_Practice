@@ -151,7 +151,7 @@ Wrong-answer reviews and evidence bundles.
 Example:
 
 ```text
-data/reviews/leet-2026-verbal-even/q014/
+data/reviews/leet-2026-verbal-even/q14/
   source/
     question_crop.png
     passage_crop.png
@@ -165,12 +165,12 @@ For attempt self-review, use the attempt ID as the first path component:
 
 ```text
 data/reviews/<attempt_id>/
-  q014.review.json
-  q021.review.json
+  q14.review.json
+  q21.review.json
   feedback_request.json
 ```
 
-Each `qXXX.review.json` keeps user and assistant layers separate:
+Each `qNN.review.json` keeps user and assistant layers separate:
 
 ```json
 {

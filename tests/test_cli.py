@@ -87,7 +87,7 @@ def test_attempt_review_create_and_grade(tmp_path: Path) -> None:
     assert (data_root / "attempts" / "attempt-001.json").exists()
     assert grade_result.exit_code == 0
     assert "Score: 1/2" in grade_result.output
-    assert (data_root / "reviews" / "attempt-001" / "q002.review.json").exists()
+    assert (data_root / "reviews" / "attempt-001" / "q02.review.json").exists()
 
 
 def test_attempt_review_regrade_updates_answer_pairs(tmp_path: Path) -> None:
@@ -138,15 +138,15 @@ def test_attempt_review_regrade_updates_answer_pairs(tmp_path: Path) -> None:
     assert regrade_result.exit_code == 0
     assert "Score: 2/2" in regrade_result.output
     assert "Archived review questions: 2" in regrade_result.output
-    assert not (data_root / "reviews" / "attempt-001" / "q002.review.json").exists()
-    assert (data_root / "reviews" / "attempt-001" / "archived" / "q002.review.json").exists()
+    assert not (data_root / "reviews" / "attempt-001" / "q02.review.json").exists()
+    assert (data_root / "reviews" / "attempt-001" / "archived" / "q02.review.json").exists()
 
 
 def test_attempt_review_migrate_self_review_command(tmp_path: Path) -> None:
     data_root = tmp_path / "data"
     review_dir = data_root / "reviews" / "attempt-001"
     review_dir.mkdir(parents=True)
-    review_path = review_dir / "q001.review.json"
+    review_path = review_dir / "q01.review.json"
     review_path.write_text(
         json.dumps(
             {

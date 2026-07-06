@@ -102,7 +102,7 @@ def archived_reviews_dir(attempt_id: str, *, data_root: Path = Path("data")) -> 
 
 
 def review_path(attempt_id: str, question_no: int, *, data_root: Path = Path("data")) -> Path:
-    return attempt_reviews_dir(attempt_id, data_root=data_root) / f"q{question_no:03d}.review.json"
+    return attempt_reviews_dir(attempt_id, data_root=data_root) / f"q{question_no:02d}.review.json"
 
 
 def canonical_dir(exam_id: str, *, data_root: Path = Path("data")) -> Path:
@@ -481,7 +481,7 @@ def _archive_review_file(attempt_id: str, question_no: int, *, data_root: Path =
     destination = archive_dir / source.name
     if destination.exists():
         stamp = _now().strftime("%Y%m%d-%H%M%S")
-        destination = archive_dir / f"q{question_no:03d}.{stamp}.review.json"
+        destination = archive_dir / f"q{question_no:02d}.{stamp}.review.json"
     os.replace(source, destination)
     return destination
 
