@@ -142,6 +142,51 @@ def test_attempt_review_regrade_updates_answer_pairs(tmp_path: Path) -> None:
     assert (data_root / "reviews" / "attempt-001" / "archived" / "q002.review.json").exists()
 
 
+def test_attempt_review_migrate_self_review_command(tmp_path: Path) -> None:
+    data_root = tmp_path / "data"
+    review_dir = data_root / "reviews" / "attempt-001"
+    review_dir.mkdir(parents=True)
+    review_path = review_dir / "q001.review.json"
+    review_path.write_text(
+        json.dumps(
+            {
+                "attempt_id": "attempt-001",
+                "exam_id": "leet-2026-reasoning-even",
+                "question_no": 1,
+                "status": "user_entered",
+                "grading": {"selected_choice": 1, "correct_choice": 3, "is_correct": False},
+                "user_self_review": {
+                    "reasoning_text": "Old reasoning.",
+                    "why_selected": "Old why.",
+                    "current_reflection": "Old reflection.",
+                    "created_by": "user",
+                },
+                "user_resolution": {"status": "pending", "created_by": "user"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "attempt-review",
+            "migrate-self-review",
+            "--data-root",
+            str(data_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Migrated review files: 1" in result.output
+    payload = json.loads(review_path.read_text(encoding="utf-8"))
+    assert "[당시 풀이 사고]\nOld reasoning." in payload["user_self_review"]["reasoning_text"]
+    assert "[선택 이유]\nOld why." in payload["user_self_review"]["reasoning_text"]
+    assert payload["user_self_review"]["current_reflection"] == "Old reflection."
+    assert payload["user_self_review"]["memory_confidence"] == "partial"
+    assert "why_selected" not in payload["user_self_review"]
+
+
 def test_review_crops_rejects_overwrite_with_refresh_preserving_edits(tmp_path, suggestion_run: Path) -> None:
     result = CliRunner().invoke(
         app,

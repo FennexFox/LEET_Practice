@@ -180,6 +180,14 @@ class UserResolutionStatus(StrEnum):
     REJECTED = "rejected"
 
 
+class MemoryConfidence(StrEnum):
+    """How clearly the user remembers their original solving process."""
+
+    CLEAR = "clear"
+    PARTIAL = "partial"
+    UNCLEAR = "unclear"
+
+
 class AttemptChoiceAnswer(BaseModel):
     """Selected answer captured at attempt level."""
 
@@ -230,11 +238,8 @@ class UserSelfReview(BaseModel):
     """Free-form user reasoning preserved separately from assistant feedback."""
 
     reasoning_text: str = ""
-    why_selected: str = ""
-    decisive_condition: str = ""
-    why_rejected_correct: str = ""
     current_reflection: str = ""
-    condition_notes: str = ""
+    memory_confidence: MemoryConfidence = MemoryConfidence.PARTIAL
     created_by: Literal["user"] = "user"
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)

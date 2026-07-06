@@ -21,6 +21,7 @@ from leet_practice.models import (
     AttemptRecord,
     AttemptReviewRecord,
     AttemptReviewStatus,
+    MemoryConfidence,
     ReviewGrading,
     UserResolution,
     UserResolutionStatus,
@@ -76,6 +77,14 @@ class RegradeResult(BaseModel):
     archived_question_numbers: list[int] = Field(default_factory=list)
 
 
+class SelfReviewMigrationResult(BaseModel):
+    """Summary of legacy self-review JSON migration."""
+
+    scanned: int = 0
+    migrated: int = 0
+    paths: list[str] = Field(default_factory=list)
+
+
 def attempts_dir(*, data_root: Path = Path("data")) -> Path:
     return data_root / "attempts"
 
@@ -125,6 +134,15 @@ def _write_json(path: Path, payload: Any) -> None:
     temp_path = path.with_name(f".{path.name}.tmp")
     temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(temp_path, path)
+
+
+OLD_SELF_REVIEW_SECTIONS = (
+    ("reasoning_text", "당시 풀이 사고"),
+    ("why_selected", "선택 이유"),
+    ("decisive_condition", "결정적으로 본 조건"),
+    ("why_rejected_correct", "정답 선지를 배제한 이유"),
+    ("condition_notes", "추가 메모"),
+)
 
 
 def _choice_from_value(value: Any) -> int:
@@ -416,11 +434,8 @@ def _has_user_self_review_content(review: AttemptReviewRecord) -> bool:
     return any(
         [
             self_review.reasoning_text.strip(),
-            self_review.why_selected.strip(),
-            self_review.decisive_condition.strip(),
-            self_review.why_rejected_correct.strip(),
             self_review.current_reflection.strip(),
-            self_review.condition_notes.strip(),
+            self_review.memory_confidence != MemoryConfidence.PARTIAL,
         ]
     )
 
@@ -647,18 +662,15 @@ def update_user_self_review(
 ) -> AttemptReviewRecord:
     allowed = {
         "reasoning_text",
-        "why_selected",
-        "decisive_condition",
-        "why_rejected_correct",
         "current_reflection",
-        "condition_notes",
+        "memory_confidence",
     }
     with _attempt_review_lock:
         review = load_review_record(attempt_id, question_no, data_root=data_root)
         current = review.user_self_review.model_dump()
         for key in allowed:
             if key in payload:
-                current[key] = payload[key] or ""
+                current[key] = payload[key] or ("partial" if key == "memory_confidence" else "")
         current["updated_at"] = _now()
         if not current.get("created_at"):
             current["created_at"] = current["updated_at"]
@@ -677,6 +689,69 @@ def update_user_self_review(
         )
         save_review_record(updated, data_root=data_root)
         return updated
+
+
+def _migrated_self_review_payload(raw_self_review: Any) -> tuple[dict[str, Any], bool]:
+    if not isinstance(raw_self_review, dict):
+        return UserSelfReview().model_dump(mode="json"), True
+
+    has_old_fields = any(key in raw_self_review for key, _label in OLD_SELF_REVIEW_SECTIONS[1:])
+    existing_memory = raw_self_review.get("memory_confidence")
+    changed = has_old_fields or existing_memory is None
+
+    if has_old_fields:
+        sections: list[str] = []
+        for key, label in OLD_SELF_REVIEW_SECTIONS:
+            value = str(raw_self_review.get(key) or "").strip()
+            if value:
+                sections.append(f"[{label}]\n{value}")
+        reasoning_text = "\n\n".join(sections)
+    else:
+        reasoning_text = str(raw_self_review.get("reasoning_text") or "")
+
+    migrated = {
+        "reasoning_text": reasoning_text,
+        "current_reflection": str(raw_self_review.get("current_reflection") or ""),
+        "memory_confidence": existing_memory or MemoryConfidence.PARTIAL,
+        "created_by": raw_self_review.get("created_by") or "user",
+        "created_at": raw_self_review.get("created_at") or _now().isoformat(),
+        "updated_at": raw_self_review.get("updated_at") or raw_self_review.get("created_at") or _now().isoformat(),
+    }
+    validated = UserSelfReview.model_validate(migrated).model_dump(mode="json")
+    if set(raw_self_review) != set(validated):
+        changed = True
+    return validated, changed
+
+
+def migrate_self_review_files(*, data_root: Path = Path("data")) -> SelfReviewMigrationResult:
+    reviews_root = data_root / "reviews"
+    result = SelfReviewMigrationResult()
+    if not reviews_root.exists():
+        return result
+
+    with _attempt_review_lock:
+        for path in sorted(reviews_root.glob("**/*.review.json")):
+            if not path.is_file():
+                continue
+            result.scanned += 1
+            try:
+                payload = _read_json(path)
+            except json.JSONDecodeError as exc:
+                raise AttemptReviewError(f"Invalid review JSON {path}: {exc}") from exc
+            if not isinstance(payload, dict):
+                raise AttemptReviewError(f"Review JSON must be an object: {path}")
+            migrated_self_review, changed = _migrated_self_review_payload(payload.get("user_self_review"))
+            if not changed:
+                continue
+            payload["user_self_review"] = migrated_self_review
+            try:
+                AttemptReviewRecord.model_validate(payload)
+            except ValidationError as exc:
+                raise AttemptReviewError(f"Migrated review is invalid {path}: {exc}") from exc
+            _write_json(path, payload)
+            result.migrated += 1
+            result.paths.append(str(path))
+    return result
 
 
 def update_user_resolution(
@@ -884,12 +959,13 @@ def workbench_html() -> str:
         <option value="user_entered">user_entered</option>
         <option value="ready_for_feedback">ready_for_feedback</option>
       </select>
-      <label title="Full free-form reconstruction of how you solved the question. Write the whole decision process here, even if it overlaps with the focused fields below.">Reasoning text</label><textarea id="reasoning_text"></textarea>
-      <label title="The direct reason you chose your selected answer at the time. Focus on the attraction of that choice, not the whole solution.">Why selected</label><textarea id="why_selected"></textarea>
-      <label title="The exact condition, phrase, comparison, calculation, or step that felt decisive while solving. Quote or name the trigger if possible.">Decisive condition, phrase, or step</label><textarea id="decisive_condition"></textarea>
-      <label title="Why the correct answer did not survive your process. Note what you overlooked, misread, rejected, or failed to verify.">Why rejected or missed correct choice</label><textarea id="why_rejected_correct"></textarea>
-      <label title="Your current post-hoc understanding of the mistake after seeing the correct answer. Keep this as your own reflection, not assistant diagnosis.">Current reflection</label><textarea id="current_reflection"></textarea>
-      <label title="Context that affected performance: time pressure, confidence, fatigue, guessing, marking for review, or test-taking conditions.">Time pressure / confidence / condition notes</label><textarea id="condition_notes"></textarea>
+      <label title="Free-form reconstruction of what you remember about your original solving process: why you chose your answer, what felt decisive, and why the correct answer did not survive.">Reasoning text</label><textarea id="reasoning_text"></textarea>
+      <label title="Your current post-hoc understanding after seeing the correct answer. Keep this as your own reflection, not assistant diagnosis.">Current reflection</label><textarea id="current_reflection"></textarea>
+      <label title="How clearly you remember the original solving process. This helps the assistant judge how much weight to put on the reasoning text.">Memory confidence</label><select id="memory_confidence">
+        <option value="clear">clear</option>
+        <option value="partial">partial</option>
+        <option value="unclear">unclear</option>
+      </select>
       <div class="actions"><button id="save">Save</button><button id="next">Next</button></div>
       <div class="feedback" id="feedback"></div>
       <label title="Your decision about imported assistant feedback after reviewing it.">Resolution</label><select id="resolution_status">
@@ -905,7 +981,7 @@ def workbench_html() -> str:
   </main>
   <script>
     let state, current, autosaveTimer;
-    const fields = ["reasoning_text", "why_selected", "decisive_condition", "why_rejected_correct", "current_reflection", "condition_notes"];
+    const fields = ["reasoning_text", "current_reflection", "memory_confidence"];
     async function load() {
       state = await fetch("/api/state").then(r => r.json());
       document.getElementById("summary").textContent = `${state.attempt.id} - ${state.score}/${state.total}`;
@@ -954,7 +1030,7 @@ def workbench_html() -> str:
         choices.appendChild(div);
       });
       document.getElementById("status").value = current.status === "ready_for_feedback" ? "ready_for_feedback" : "user_entered";
-      fields.forEach(id => document.getElementById(id).value = current.user_self_review[id] || "");
+      fields.forEach(id => document.getElementById(id).value = current.user_self_review[id] || (id === "memory_confidence" ? "partial" : ""));
       renderFeedback();
     }
     function renderFeedback() {

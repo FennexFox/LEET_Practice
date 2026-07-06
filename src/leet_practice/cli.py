@@ -213,6 +213,25 @@ def attempt_review_regrade_command(
     _run_attempt_review_regrade(attempt_id, data_root=data_root, answer_updates=answer_updates)
 
 
+def _run_attempt_review_migrate_self_review(*, data_root: Path) -> None:
+    try:
+        result = attempt_review_workflow.migrate_self_review_files(data_root=data_root)
+    except attempt_review_workflow.AttemptReviewError as exc:
+        console.print(f"[red]Self-review migration failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    console.print(f"Scanned review files: {result.scanned}")
+    console.print(f"Migrated review files: {result.migrated}")
+
+
+@attempt_review_app.command("migrate-self-review")
+def attempt_review_migrate_self_review_command(
+    data_root: Path = typer.Option(DEFAULT_DATA_ROOT, "--data-root", help="Local data root."),
+) -> None:
+    """Migrate legacy user self-review fields into the simplified schema."""
+
+    _run_attempt_review_migrate_self_review(data_root=data_root)
+
+
 def _run_attempt_review_export(attempt_id: str, *, data_root: Path, out_file: Path | None) -> None:
     try:
         path = attempt_review_workflow.export_feedback_bundle(

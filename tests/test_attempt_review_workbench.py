@@ -50,14 +50,14 @@ def test_attempt_review_workbench_serves_state_and_updates_review(tmp_path: Path
         root = urllib.request.urlopen(f"{base_url}/", timeout=5).read().decode("utf-8")
         assert "LEET Attempt Review" in root
         assert "reasoning_text" in root
+        assert "memory_confidence" in root
         assert "choiceNumber" in root
         assert 'padStart(2, "0")' in root
         assert "white-space: pre-wrap" in root
         assert "choice-text" in root
         assert "passageBox" in root
         assert "passage-text" in root
-        assert "Full free-form reconstruction" in root
-        assert "The direct reason you chose your selected answer" in root
+        assert "Free-form reconstruction" in root
         assert "Your current post-hoc understanding" in root
 
         state = json.loads(urllib.request.urlopen(f"{base_url}/api/state", timeout=5).read().decode("utf-8"))
@@ -71,12 +71,21 @@ def test_attempt_review_workbench_serves_state_and_updates_review(tmp_path: Path
         request = urllib.request.Request(
             f"{base_url}/api/reviews/1/self-review",
             method="POST",
-            data=json.dumps({"why_selected": "Surface match.", "status": "ready_for_feedback"}).encode("utf-8"),
+            data=json.dumps(
+                {
+                    "reasoning_text": "Surface match.",
+                    "current_reflection": "Need to compare the condition.",
+                    "memory_confidence": "clear",
+                    "status": "ready_for_feedback",
+                }
+            ).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
         updated = json.loads(urllib.request.urlopen(request, timeout=5).read().decode("utf-8"))
         assert updated["status"] == "ready_for_feedback"
-        assert updated["user_self_review"]["why_selected"] == "Surface match."
+        assert updated["user_self_review"]["reasoning_text"] == "Surface match."
+        assert updated["user_self_review"]["current_reflection"] == "Need to compare the condition."
+        assert updated["user_self_review"]["memory_confidence"] == "clear"
 
         invalid_status_request = urllib.request.Request(
             f"{base_url}/api/reviews/1/self-review",

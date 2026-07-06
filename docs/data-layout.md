@@ -181,11 +181,8 @@ Each `qXXX.review.json` keeps user and assistant layers separate:
   },
   "user_self_review": {
     "reasoning_text": "",
-    "why_selected": "",
-    "decisive_condition": "",
-    "why_rejected_correct": "",
     "current_reflection": "",
-    "condition_notes": "",
+    "memory_confidence": "partial",
     "created_by": "user"
   },
   "assistant_feedback": {

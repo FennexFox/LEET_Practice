@@ -63,6 +63,13 @@ Import assistant feedback produced from that bundle:
 leet-practice attempt-review feedback-import attempt-001 --file .\assistant_feedback.json
 ```
 
+Migrate existing review files created with the older multi-field self-review
+schema:
+
+```powershell
+leet-practice attempt-review migrate-self-review
+```
+
 ## Answer source
 
 Grading prefers `data/canonical/<exam_id>/answer_key.json`. If that file does
@@ -72,6 +79,8 @@ for the same question, grading fails instead of guessing.
 
 ## Separation rule
 
-User self-review fields are the user's raw reasoning evidence. Assistant feedback
-is imported into `assistant_feedback` and may include `provisional_error_tags`,
-but those tags are not final until the user records a resolution.
+User self-review fields are the user's raw reasoning evidence:
+`reasoning_text`, `current_reflection`, and `memory_confidence`. Assistant
+feedback is imported into `assistant_feedback` and may include
+`provisional_error_tags`, but those tags are not final until the user records a
+resolution.
