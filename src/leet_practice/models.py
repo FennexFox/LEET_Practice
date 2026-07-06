@@ -10,7 +10,7 @@ from datetime import date, datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class Subject(StrEnum):
@@ -161,8 +161,130 @@ class AttemptAnswer(BaseModel):
         return self.selected_answer == self.correct_answer
 
 
+class AttemptReviewStatus(StrEnum):
+    """Workflow status for one attempted question review."""
+
+    UNREVIEWED = "unreviewed"
+    USER_ENTERED = "user_entered"
+    READY_FOR_FEEDBACK = "ready_for_feedback"
+    FEEDBACK_ADDED = "feedback_added"
+    RESOLVED = "resolved"
+
+
+class UserResolutionStatus(StrEnum):
+    """User decision on assistant feedback."""
+
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    EDITED = "edited"
+    REJECTED = "rejected"
+
+
+class AttemptChoiceAnswer(BaseModel):
+    """Selected answer captured at attempt level."""
+
+    question_no: int = Field(gt=0)
+    selected_choice: int = Field(ge=1, le=5)
+    confidence: int | None = Field(default=None, ge=1, le=5)
+    elapsed_seconds: int | None = Field(default=None, ge=0)
+    marked_for_review: bool = False
+    guessed: bool = False
+
+
+class AttemptRecord(BaseModel):
+    """A stored attempt with selected answers independent of canonical data."""
+
+    id: str
+    exam_id: str
+    attempt_date: date = Field(default_factory=date.today)
+    mode: Literal["real", "review", "partial"] = "real"
+    answers: list[AttemptChoiceAnswer] = Field(default_factory=list)
+    time_limit_minutes: int | None = Field(default=None, gt=0)
+    notes: str | None = None
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+    @field_validator("answers")
+    @classmethod
+    def require_unique_question_numbers(cls, value: list[AttemptChoiceAnswer]) -> list[AttemptChoiceAnswer]:
+        question_numbers = [answer.question_no for answer in value]
+        if len(question_numbers) != len(set(question_numbers)):
+            raise ValueError("attempt answers must not contain duplicate question_no values")
+        return sorted(value, key=lambda answer: answer.question_no)
+
+
+class ReviewGrading(BaseModel):
+    """Grading result for one attempted question."""
+
+    selected_choice: int = Field(ge=1, le=5)
+    correct_choice: int = Field(ge=1, le=5)
+    is_correct: bool = False
+
+    @model_validator(mode="after")
+    def derive_is_correct(self) -> "ReviewGrading":
+        self.is_correct = self.selected_choice == self.correct_choice
+        return self
+
+
+class UserSelfReview(BaseModel):
+    """Free-form user reasoning preserved separately from assistant feedback."""
+
+    reasoning_text: str = ""
+    why_selected: str = ""
+    decisive_condition: str = ""
+    why_rejected_correct: str = ""
+    current_reflection: str = ""
+    condition_notes: str = ""
+    created_by: Literal["user"] = "user"
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+
+class AssistantFeedback(BaseModel):
+    """Assistant-generated diagnosis with explicitly provisional tags."""
+
+    diagnosis_text: str = ""
+    evidence: list[str] = Field(default_factory=list)
+    provisional_error_tags: list[str] = Field(default_factory=list)
+    correction_rule: str = ""
+    created_by: Literal["assistant"] = "assistant"
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+
+class UserResolution(BaseModel):
+    """User decision after reviewing assistant feedback."""
+
+    status: UserResolutionStatus = UserResolutionStatus.PENDING
+    final_error_tags: list[str] = Field(default_factory=list)
+    note: str | None = None
+    created_by: Literal["user"] = "user"
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+
+class AttemptReviewRecord(BaseModel):
+    """Per-question self-review record for the v1 attempt-review workflow."""
+
+    attempt_id: str
+    exam_id: str
+    question_no: int = Field(gt=0)
+    question_id: str | None = None
+    status: AttemptReviewStatus = AttemptReviewStatus.UNREVIEWED
+    grading: ReviewGrading
+    user_self_review: UserSelfReview = Field(default_factory=UserSelfReview)
+    assistant_feedback: AssistantFeedback | None = None
+    user_resolution: UserResolution = Field(default_factory=UserResolution)
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+
 class Review(BaseModel):
-    """Wrong-answer review record."""
+    """Legacy wrong-answer review record.
+
+    The v1 attempt-review workflow uses AttemptReviewRecord instead so user
+    reasoning is not forced into early fixed taxonomy choices.
+    """
 
     id: str
     attempt_id: str

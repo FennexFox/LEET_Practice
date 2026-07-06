@@ -33,6 +33,63 @@ def test_review_crops_rejects_non_loopback_host_without_unsafe_opt_in(tmp_path, 
     assert "Refusing to bind" in result.output
 
 
+def test_attempt_review_serve_rejects_non_loopback_host_without_unsafe_opt_in(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        app,
+        [
+            "attempt-review",
+            "serve",
+            "attempt-001",
+            "--data-root",
+            str(tmp_path / "data"),
+            "--host",
+            "0.0.0.0",
+            "--no-open",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Refusing to bind" in result.output
+
+
+def test_attempt_review_create_and_grade(tmp_path: Path) -> None:
+    data_root = tmp_path / "data"
+    exam_id = "leet-2026-reasoning-even"
+    canonical_dir = data_root / "canonical" / exam_id
+    canonical_dir.mkdir(parents=True)
+    (canonical_dir / "answer_key.json").write_text(json.dumps({"answers": {"1": 1, "2": 4}}), encoding="utf-8")
+
+    create_result = CliRunner().invoke(
+        app,
+        [
+            "attempt-review",
+            "create",
+            "attempt-001",
+            exam_id,
+            "--answers",
+            "12",
+            "--data-root",
+            str(data_root),
+        ],
+    )
+    grade_result = CliRunner().invoke(
+        app,
+        [
+            "attempt-review",
+            "grade",
+            "attempt-001",
+            "--data-root",
+            str(data_root),
+        ],
+    )
+
+    assert create_result.exit_code == 0
+    assert (data_root / "attempts" / "attempt-001.json").exists()
+    assert grade_result.exit_code == 0
+    assert "Score: 1/2" in grade_result.output
+    assert (data_root / "reviews" / "attempt-001" / "q002.review.json").exists()
+
+
 def test_review_crops_rejects_overwrite_with_refresh_preserving_edits(tmp_path, suggestion_run: Path) -> None:
     result = CliRunner().invoke(
         app,

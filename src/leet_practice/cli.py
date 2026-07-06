@@ -10,6 +10,7 @@ import typer
 from rich.console import Console
 
 from leet_practice import __version__
+from leet_practice import attempt_review as attempt_review_workflow
 from leet_practice import ocr_crops
 from leet_practice.ocr_benchmark import benchmark_record, write_benchmark_summary
 from leet_practice.verification import (
@@ -21,6 +22,7 @@ from leet_practice.verification import (
 )
 
 app = typer.Typer(help="Local-first LEET practice and wrong-answer review tools.")
+attempt_review_app = typer.Typer(help="Attempt grading, self-review, and assistant feedback handoff.")
 console = Console()
 DEFAULT_DATA_ROOT = Path("data")
 DEFAULT_ARTIFACTS_ROOT = Path("artifacts/question_crop_suggestions")
@@ -100,6 +102,196 @@ def scaffold_info() -> None:
     console.print("- data/canonical/: verified local exam data")
     console.print("- data/attempts/: personal attempt records")
     console.print("- data/reviews/: wrong-answer reviews")
+
+
+def _run_attempt_review_create(
+    attempt_id: str,
+    exam_id: str,
+    answers: str,
+    *,
+    data_root: Path,
+    mode: str,
+    notes: str | None,
+    overwrite: bool,
+) -> None:
+    try:
+        attempt = attempt_review_workflow.create_attempt_record(
+            attempt_id,
+            exam_id,
+            answers,
+            data_root=data_root,
+            mode=mode,
+            notes=notes,
+            overwrite=overwrite,
+        )
+    except attempt_review_workflow.AttemptReviewError as exc:
+        console.print(f"[red]Attempt creation failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    console.print(f"Attempt: {attempt_review_workflow.attempt_path(attempt.id, data_root=data_root)}")
+    console.print(f"Answers: {len(attempt.answers)}")
+
+
+@attempt_review_app.command("create")
+def attempt_review_create_command(
+    attempt_id: str = typer.Argument(..., metavar="ATTEMPT_ID", help="Attempt ID to store under data/attempts/."),
+    exam_id: str = typer.Argument(..., metavar="EXAM_ID", help="Canonical exam ID."),
+    answers: str = typer.Option(..., "--answers", help='Answer string, for example "22542 52323".'),
+    data_root: Path = typer.Option(DEFAULT_DATA_ROOT, "--data-root", help="Local data root."),
+    mode: str = typer.Option("real", "--mode", help="Attempt mode: real, review, or partial."),
+    notes: str | None = typer.Option(None, "--notes", help="Optional attempt note."),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite an existing attempt record."),
+) -> None:
+    """Create an attempt record from a selected-answer string."""
+
+    _run_attempt_review_create(
+        attempt_id,
+        exam_id,
+        answers,
+        data_root=data_root,
+        mode=mode,
+        notes=notes,
+        overwrite=overwrite,
+    )
+
+
+def _run_attempt_review_grade(attempt_id: str, *, data_root: Path) -> None:
+    try:
+        state = attempt_review_workflow.initialize_attempt_reviews(attempt_id, data_root=data_root)
+    except attempt_review_workflow.AttemptReviewError as exc:
+        console.print(f"[red]Attempt grading failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    console.print(f"Answer key: {state.answer_key_source}")
+    console.print(f"Score: {state.score}/{state.total}")
+    wrong = ", ".join(str(question_no) for question_no in state.wrong_question_numbers) or "none"
+    console.print(f"Wrong questions: {wrong}")
+    console.print(f"Review directory: {attempt_review_workflow.attempt_reviews_dir(attempt_id, data_root=data_root)}")
+
+
+@attempt_review_app.command("grade")
+def attempt_review_grade_command(
+    attempt_id: str = typer.Argument(..., metavar="ATTEMPT_ID", help="Attempt ID."),
+    data_root: Path = typer.Option(DEFAULT_DATA_ROOT, "--data-root", help="Local data root."),
+) -> None:
+    """Grade an attempt and create review files for wrong answers."""
+
+    _run_attempt_review_grade(attempt_id, data_root=data_root)
+
+
+def _run_attempt_review_export(attempt_id: str, *, data_root: Path, out_file: Path | None) -> None:
+    try:
+        path = attempt_review_workflow.export_feedback_bundle(
+            attempt_id,
+            data_root=data_root,
+            out_file=out_file,
+        )
+    except attempt_review_workflow.AttemptReviewError as exc:
+        console.print(f"[red]Feedback export failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    console.print(f"Feedback request: {path}")
+
+
+@attempt_review_app.command("feedback-export")
+def attempt_review_feedback_export_command(
+    attempt_id: str = typer.Argument(..., metavar="ATTEMPT_ID", help="Attempt ID."),
+    data_root: Path = typer.Option(DEFAULT_DATA_ROOT, "--data-root", help="Local data root."),
+    out_file: Path | None = typer.Option(None, "--out-file", help="Output feedback request JSON path."),
+) -> None:
+    """Write a local bundle for assistant feedback."""
+
+    _run_attempt_review_export(attempt_id, data_root=data_root, out_file=out_file)
+
+
+def _run_attempt_review_import(attempt_id: str, *, data_root: Path, feedback_file: Path) -> None:
+    try:
+        reviews = attempt_review_workflow.import_assistant_feedback(
+            attempt_id,
+            feedback_file,
+            data_root=data_root,
+        )
+    except attempt_review_workflow.AttemptReviewError as exc:
+        console.print(f"[red]Feedback import failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    console.print(f"Imported assistant feedback for {len(reviews)} review(s).")
+
+
+@attempt_review_app.command("feedback-import")
+def attempt_review_feedback_import_command(
+    attempt_id: str = typer.Argument(..., metavar="ATTEMPT_ID", help="Attempt ID."),
+    feedback_file: Path = typer.Option(..., "--file", exists=True, help="Assistant feedback JSON file."),
+    data_root: Path = typer.Option(DEFAULT_DATA_ROOT, "--data-root", help="Local data root."),
+) -> None:
+    """Import assistant feedback without overwriting user self-review."""
+
+    _run_attempt_review_import(attempt_id, data_root=data_root, feedback_file=feedback_file)
+
+
+def _run_attempt_review_serve(
+    attempt_id: str,
+    *,
+    data_root: Path,
+    host: str,
+    port: int,
+    no_open: bool,
+    unsafe_allow_remote: bool,
+) -> None:
+    if not _is_loopback_host(host) and not unsafe_allow_remote:
+        console.print(
+            "[red]Refusing to bind the unauthenticated workbench to a non-loopback host.[/red]\n"
+            "Use --unsafe-allow-remote only on a trusted network."
+        )
+        raise typer.Exit(1)
+    try:
+        state = attempt_review_workflow.initialize_attempt_reviews(attempt_id, data_root=data_root)
+    except attempt_review_workflow.AttemptReviewError as exc:
+        console.print(f"[red]Attempt review setup failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    console.print(f"Attempt: {attempt_review_workflow.attempt_path(attempt_id, data_root=data_root)}")
+    console.print(f"Review directory: {attempt_review_workflow.attempt_reviews_dir(attempt_id, data_root=data_root)}")
+    console.print(f"Wrong questions: {len(state.wrong_question_numbers)}")
+    url = f"http://{host}:{port}/"
+    console.print(f"Starting local attempt-review workbench: {url}")
+    console.print("Press Ctrl+C to stop.")
+    try:
+        attempt_review_workflow.serve_review_workbench(
+            attempt_id,
+            data_root=data_root,
+            host=host,
+            port=port,
+            open_browser=not no_open,
+        )
+    except KeyboardInterrupt:
+        console.print("\nStopped attempt-review workbench.")
+    except OSError as exc:
+        console.print(f"[red]Failed to start workbench:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+
+@attempt_review_app.command("serve")
+def attempt_review_serve_command(
+    attempt_id: str = typer.Argument(..., metavar="ATTEMPT_ID", help="Attempt ID."),
+    data_root: Path = typer.Option(DEFAULT_DATA_ROOT, "--data-root", help="Local data root."),
+    host: str = typer.Option("127.0.0.1", "--host", help="Local bind host."),
+    port: int = typer.Option(8766, "--port", help="Local bind port."),
+    no_open: bool = typer.Option(False, "--no-open", help="Do not open the browser automatically."),
+    unsafe_allow_remote: bool = typer.Option(
+        False,
+        "--unsafe-allow-remote",
+        help="Allow binding the unauthenticated workbench to a non-loopback host.",
+    ),
+) -> None:
+    """Serve the separate attempt self-review workbench."""
+
+    _run_attempt_review_serve(
+        attempt_id,
+        data_root=data_root,
+        host=host,
+        port=port,
+        no_open=no_open,
+        unsafe_allow_remote=unsafe_allow_remote,
+    )
+
+
+app.add_typer(attempt_review_app, name="attempt-review")
 
 
 def _run_ocr(
