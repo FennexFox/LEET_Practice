@@ -51,6 +51,7 @@ def test_attempt_review_workbench_serves_state_and_updates_review(tmp_path: Path
         assert "LEET Attempt Review" in root
         assert "reasoning_text" in root
         assert "choiceNumber" in root
+        assert 'padStart(2, "0")' in root
         assert "white-space: pre-wrap" in root
         assert "choice-text" in root
         assert "passageBox" in root

@@ -916,7 +916,7 @@ def workbench_html() -> str:
       const queue = document.getElementById("queue"); queue.innerHTML = "";
       state.reviews.forEach(review => {
         const button = document.createElement("button"); button.className = "queue-item" + (current?.question_no === review.question_no ? " active" : "");
-        const title = document.createElement("strong"); title.textContent = `Q${String(review.question_no).padStart(3, "0")}`;
+        const title = document.createElement("strong"); title.textContent = `Q${String(review.question_no).padStart(2, "0")}`;
         const meta = document.createElement("span"); meta.textContent = `${review.status} - chose ${review.grading.selected_choice}, correct ${review.grading.correct_choice}`;
         button.append(title, meta);
         button.onclick = () => select(review.question_no);
