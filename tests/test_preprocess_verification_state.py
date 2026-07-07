@@ -19,7 +19,7 @@ def _load_preprocess_verification_state():
     return module
 
 
-def test_preprocess_state_preserves_existing_question_data_when_parse_fails() -> None:
+def test_preprocess_state_preserves_manually_edited_question_data_when_parse_fails() -> None:
     module = _load_preprocess_verification_state()
     state = {
         "candidates": [
@@ -31,6 +31,7 @@ def test_preprocess_state_preserves_existing_question_data_when_parse_fails() ->
                 "choices": ["A", "B", "C", "D", "E"],
                 "status": "unreviewed",
                 "notes": "existing note",
+                "manually_edited": True,
             }
         ]
     }
@@ -42,6 +43,34 @@ def test_preprocess_state_preserves_existing_question_data_when_parse_fails() ->
     assert candidate["stem"] == "Existing stem"
     assert candidate["choices"] == ["A", "B", "C", "D", "E"]
     assert candidate["status"] == "unreviewed"
+    assert candidate["manually_edited"] is True
+    assert "auto-preprocess skipped: parse failed" in candidate["notes"]
+    assert report == ["q01: skipped (parse failed, kept manually edited data)"]
+
+
+def test_preprocess_state_clears_unedited_ocr_draft_fields_when_parse_fails() -> None:
+    module = _load_preprocess_verification_state()
+    state = {
+        "candidates": [
+            {
+                "candidate_type": "question",
+                "question_number": 37,
+                "raw_ocr_text": "Question text without usable choice markers",
+                "stem": "Auto draft stem",
+                "choices": ["formula", "mixed stem", "C", "D", "E"],
+                "status": "unreviewed",
+                "notes": "",
+            }
+        ]
+    }
+
+    changed, report = module.preprocess_state(state, set_status="needs_fix")
+    candidate = state["candidates"][0]
+
+    assert changed == 1
+    assert candidate["stem"] == ""
+    assert candidate["choices"] == ["", "", "", "", ""]
+    assert candidate["status"] == "needs_fix"
     assert candidate.get("manually_edited") is None
     assert "auto-preprocess skipped: parse failed" in candidate["notes"]
-    assert report == ["q01: skipped (parse failed, kept existing data)"]
+    assert report == ["q37: skipped (parse failed, cleared unsafe OCR draft fields)"]

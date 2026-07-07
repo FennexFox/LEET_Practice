@@ -294,7 +294,16 @@ def preprocess_state(state: dict[str, Any], *, set_status: str | None) -> tuple[
             if result.warnings:
                 note += "; " + " | ".join(result.warnings)
             candidate["notes"] = merge_note(str(candidate.get("notes") or ""), note)
-            report.append(f"q{qno:02d}: skipped (parse failed, kept existing data)")
+            if candidate.get("manually_edited"):
+                report.append(f"q{qno:02d}: skipped (parse failed, kept manually edited data)")
+                continue
+            candidate["stem"] = ""
+            candidate["choices"] = ["", "", "", "", ""]
+            if set_status and candidate.get("status") == "unreviewed":
+                candidate["status"] = set_status
+            if old_stem or any(old_choices or []):
+                changed += 1
+            report.append(f"q{qno:02d}: skipped (parse failed, cleared unsafe OCR draft fields)")
             continue
 
         candidate["stem"] = result.stem
