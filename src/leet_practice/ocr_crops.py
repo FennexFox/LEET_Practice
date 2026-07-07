@@ -877,6 +877,55 @@ def score_anchor(row: StreamRow, block: ColumnBlock, allow_weak: bool) -> Anchor
     )
 
 
+def question_anchor_chain_value(candidate: AnchorCandidate, previous: AnchorCandidate | None) -> float:
+    value = 10.0 + candidate.score
+    if previous is None:
+        return value
+
+    gap = candidate.question_number - previous.question_number
+    if gap == 1:
+        return value + 2.0
+    return value - min(8.0, max(0, gap - 1) * 0.75)
+
+
+def select_anchor_sequence(candidates: list[AnchorCandidate], min_score: float) -> list[AnchorCandidate]:
+    eligible = [
+        candidate
+        for candidate in sorted(candidates, key=lambda item: (item.stream_y_start, item.question_number, -item.score))
+        if candidate.score >= min_score
+    ]
+    if not eligible:
+        return []
+
+    best_scores = [question_anchor_chain_value(candidate, None) for candidate in eligible]
+    best_lengths = [1 for _ in eligible]
+    predecessors: list[int | None] = [None for _ in eligible]
+
+    for index, candidate in enumerate(eligible):
+        for prev_index in range(index):
+            previous = eligible[prev_index]
+            if previous.question_number >= candidate.question_number:
+                continue
+            if previous.stream_y_start >= candidate.stream_y_start:
+                continue
+            score = best_scores[prev_index] + question_anchor_chain_value(candidate, previous)
+            length = best_lengths[prev_index] + 1
+            if score > best_scores[index] or (
+                score == best_scores[index] and length > best_lengths[index]
+            ):
+                best_scores[index] = score
+                best_lengths[index] = length
+                predecessors[index] = prev_index
+
+    best_index = max(range(len(eligible)), key=lambda item: (best_scores[item], best_lengths[item], -eligible[item].stream_y_start))
+    selected: list[AnchorCandidate] = []
+    while best_index is not None:
+        selected.append(eligible[best_index])
+        best_index = predecessors[best_index]
+    selected.reverse()
+    return selected
+
+
 def detect_anchor_candidates(
     rows: list[StreamRow],
     blocks_by_id: dict[str, ColumnBlock],
@@ -891,9 +940,7 @@ def detect_anchor_candidates(
 
     selected: list[AnchorCandidate] = []
     last_question_number: int | None = None
-    for candidate in sorted(candidates, key=lambda item: (item.stream_y_start, item.question_number)):
-        if candidate.score < min_score:
-            continue
+    for candidate in select_anchor_sequence(candidates, min_score):
         if last_question_number is not None and candidate.question_number <= last_question_number:
             continue
         reasons = list(candidate.reasons)

@@ -435,6 +435,72 @@ def test_build_stream_preserves_partial_ocr_blocks_after_keyboard_interrupt(tmp_
     assert [row["text"] for row in payload["rows"]] == ["1. kept"]
 
 
+def test_anchor_selection_prefers_long_sequence_over_false_forward_jump() -> None:
+    module = _load_suggest_question_crops()
+    block = module.ColumnBlock(
+        block_id="p001_left",
+        page=1,
+        column="left",
+        page_image_path="page_001.png",
+        image_path="page_001_left.png",
+        page_bbox=[0, 0, 1000, 2000],
+        local_size=[1000, 2000],
+        content_bbox=[0, 0, 1000, 2000],
+        content_page_bbox=[0, 0, 1000, 2000],
+        stream_y_start=0.0,
+        stream_y_end=2000.0,
+    )
+
+    def row(index: int, text: str, x: int = 2):
+        y = index * 100
+        return module.StreamRow(
+            row_id=f"p001_left_r{index:03d}",
+            block_id="p001_left",
+            page=1,
+            column="left",
+            source_image_path="page_001_left.png",
+            local_bbox=[x, y, x + 120, y + 30],
+            source_page_bbox=[x, y, x + 120, y + 30],
+            content_block_bbox=[0, 0, 1000, 2000],
+            stream_y_start=float(y),
+            stream_y_end=float(y + 30),
+            text=text,
+            confidence=0.95,
+            excluded=False,
+            exclusion_reasons=[],
+        )
+
+    rows = [
+        row(1, "1. first"),
+        row(2, "2. second"),
+        row(3, "3. third"),
+        row(4, "4. fourth"),
+        row(5, "5. fifth"),
+        row(6, "30. continuation text inside q05", x=120),
+        row(7, "6. sixth"),
+        row(8, "7. seventh"),
+    ]
+
+    all_candidates, selected = module.detect_anchor_candidates(
+        rows,
+        {"p001_left": block},
+        min_score=0.48,
+        allow_weak=False,
+    )
+
+    assert [(candidate.question_number, candidate.selected) for candidate in all_candidates] == [
+        (1, True),
+        (2, True),
+        (3, True),
+        (4, True),
+        (5, True),
+        (30, False),
+        (6, True),
+        (7, True),
+    ]
+    assert [candidate.question_number for candidate in selected] == [1, 2, 3, 4, 5, 6, 7]
+
+
 def test_suggestions_payload_top_level_schema_is_stable(tmp_path: Path) -> None:
     module = _load_suggest_question_crops()
     args = SimpleNamespace(
