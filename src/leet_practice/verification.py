@@ -1479,6 +1479,15 @@ def load_verified_drafts(
     return passages, questions
 
 
+_KOREAN_SPACING_COLLAPSE_RE = re.compile(r"[가-힣]{40,}")
+
+
+def _looks_like_collapsed_korean_spacing(text: str) -> bool:
+    """Detect severe spacing loss without flagging ordinary short compounds."""
+
+    return bool(_KOREAN_SPACING_COLLAPSE_RE.search(text))
+
+
 def validate_promotion(passages: list[VerifiedPassageDraft], questions: list[VerifiedQuestionDraft]) -> None:
     errors: list[str] = []
     passage_ids = {passage.id for passage in passages}
@@ -1490,12 +1499,27 @@ def validate_promotion(passages: list[VerifiedPassageDraft], questions: list[Ver
         if question.question_no in question_numbers:
             errors.append(f"Duplicate question number: {question.question_no}.")
         question_numbers.add(question.question_no)
+        if not question.stem.strip():
+            errors.append(f"Question {question.question_no} is missing stem text.")
+        if _looks_like_collapsed_korean_spacing(question.stem):
+            errors.append(f"Question {question.question_no} stem appears to have collapsed Korean spacing.")
         if len(question.choices) != 5:
             errors.append(f"Question {question.question_no} must have exactly five choices.")
         if any(not (choice.text or "").strip() for choice in question.choices):
             errors.append(f"Question {question.question_no} has an empty choice.")
+        for choice in question.choices:
+            if _looks_like_collapsed_korean_spacing(choice.text):
+                errors.append(
+                    f"Question {question.question_no} choice {choice.choice_no} appears to have collapsed Korean spacing."
+                )
         if not 1 <= question.correct_answer <= 5:
             errors.append(f"Question {question.question_no} has an invalid correct answer.")
+        correct_choices = [choice.choice_no for choice in question.choices if choice.is_correct]
+        if correct_choices != [question.correct_answer]:
+            errors.append(
+                f"Question {question.question_no} correct_answer={question.correct_answer} "
+                f"does not match choice is_correct flags: {correct_choices}."
+            )
         if question.passage_id and question.passage_id not in passage_ids:
             errors.append(f"Question {question.question_no} links to missing passage {question.passage_id}.")
         if not question.source_provenance:
