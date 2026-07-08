@@ -65,11 +65,11 @@ These tags are provisional mechanism labels for review and later promotion. They
 ## `RELATION_DIRECTION_REVERSAL`
 
 - Korean display name: 관계 방향 전도
-- Definition: 현재/목표, 원인/결과, 대상/표상, 주체/객체, 전/후처럼 방향성이 있는 관계를 반대로 잡은 오류.
-- Positive criteria: 열, 화살표, 비교 대상, 수식 대상, 교환·보상·통제의 방향이 바뀌었을 때 사용한다.
-- Negative criteria: 단순히 조건 하나를 빼먹은 경우에는 범위·조건 오적용 또는 전역 제약 누락을 우선한다.
-- Neighboring tags: TABLE_DIAGRAM_ENCODING_ERROR는 표·기호 입력 자체가 흔들릴 때, ROLE_ATTRIBUTION_ERROR는 주장·입장 귀속이 바뀔 때 우선한다.
-- Representative review files: data/reviews/2020 추리논증 홀수형/q39.review.json, data/reviews/2021 추리논증 홀수형/q06.review.json, data/reviews/2021 추리논증 홀수형/q27.review.json, data/reviews/2023 언어이해 짝수형/q27.review.json
+- Definition: A→B, 원인→결과, 주는 사람→받는 사람, 현재→목표, 입력→출력처럼 방향성이 명시된 관계를 반대로 잡은 오류.
+- Positive criteria: 화살표, 비교 방향, 수식 대상, 교환·보상·통제의 방향이 실제 선지 판단에서 뒤집혔을 때 사용한다.
+- Negative criteria: 명칭과 실제 속성을 혼동한 경우에는 TABLE_DIAGRAM_ENCODING_ERROR나 TEXTUAL_REDEFINITION_MISSED를 우선한다. 보완/대체 같은 방식어 오독은 TEXTUAL_REDEFINITION_MISSED를 우선한다.
+- Neighboring tags: TABLE_DIAGRAM_ENCODING_ERROR는 표·기호·변수 입력 자체가 흔들릴 때, TEXTUAL_REDEFINITION_MISSED는 지문식 정의나 방식어를 다른 뜻으로 처리했을 때 우선한다.
+- Representative review files: data/reviews/2021 추리논증 홀수형/q06.review.json, data/reviews/2021 추리논증 홀수형/q27.review.json, data/reviews/2023 언어이해 짝수형/q27.review.json
 - Suggested correction rule: 방향어가 나오면 `A -> B` 형식으로 다시 쓰고, 선지가 같은 방향을 보존하는지 확인한다.
 
 ## `ROLE_ATTRIBUTION_ERROR`
@@ -94,13 +94,13 @@ These tags are provisional mechanism labels for review and later promotion. They
 
 ## `TABLE_DIAGRAM_ENCODING_ERROR`
 
-- Korean display name: 표·도식 인코딩 오류
-- Definition: 표, 도식, 그래프, 실험표, 수치 단위, 부호, 기호 라벨을 재부호화하지 못하거나 잘못 읽은 오류.
-- Positive criteria: 현재/선호 열, ㉠·㉡ 라벨, 투과율/반사율, 점수/등수, 평균/분포, 실험 비교 변수를 잘못 인코딩했을 때 사용한다.
-- Negative criteria: 표는 맞게 읽었지만 전체 제약을 끝까지 유지하지 못했다면 GLOBAL_CONSTRAINT_DROPPED를 우선한다.
-- Neighboring tags: RELATION_DIRECTION_REVERSAL은 표 안 방향 전도가 핵심일 때 secondary로 자주 붙는다.
-- Representative review files: data/reviews/2020 추리논증 홀수형/q28.review.json, data/reviews/2020 추리논증 홀수형/q29.review.json, data/reviews/2022 추리논증 짝수형/q24.review.json, data/reviews/2022 추리논증 짝수형/q27.review.json
-- Suggested correction rule: 표·그래프를 선지로 가기 전에 한 줄 식이나 2x2 표로 다시 쓴다.
+- Korean display name: 표·도식·변수 인코딩 오류
+- Definition: 표, 도식, 그래프, 실험 설계, 변수 비교, 수치 임계값, 기호 라벨을 선지 판단 전에 올바른 문장·식·비교쌍으로 재부호화하지 못한 오류.
+- Positive criteria: 현재/선호 열, ㉠·㉡ 라벨, 투과율/반사율, 점수/등수, 평균/분포, 실험 비교 변수, 임계값을 잘못 인코딩했을 때 사용한다.
+- Negative criteria: 입력값은 맞게 읽었지만 전체 제약을 끝까지 유지하지 못했다면 GLOBAL_CONSTRAINT_DROPPED를 우선한다.
+- Neighboring tags: RELATION_DIRECTION_REVERSAL은 인코딩된 값의 방향만 뒤집힌 경우 secondary로 자주 붙는다. FORMAL_CONDITION_ERROR는 식 조작 자체가 핵심일 때 우선한다.
+- Representative review files: data/reviews/2020 추리논증 홀수형/q28.review.json, data/reviews/2020 추리논증 홀수형/q29.review.json, data/reviews/2020 추리논증 홀수형/q39.review.json, data/reviews/2022 추리논증 짝수형/q24.review.json
+- Suggested correction rule: 표·그래프·실험 설계는 선지로 가기 전에 한 줄 식, 2x2 표, 또는 변수 비교쌍으로 다시 쓴다.
 
 ## `TEXTUAL_REDEFINITION_MISSED`
 
@@ -109,7 +109,7 @@ These tags are provisional mechanism labels for review and later promotion. They
 - Positive criteria: 인정, 복종, 대체, 제3자, 업무수탁자처럼 지문 안 정의가 선지 판단의 기준일 때 사용한다.
 - Negative criteria: 용어 정의는 보존했지만 조건 일부를 놓친 경우에는 SCOPE_CONDITION_MISAPPLICATION을 우선한다.
 - Neighboring tags: CONCEPT_LAYER_CONFUSION은 정의보다 층위 구분이 핵심일 때 쓴다.
-- Representative review files: data/reviews/2022 언어이해 홀수형/q29.review.json, data/reviews/2022 추리논증 짝수형/q06.review.json
+- Representative review files: data/reviews/2022 언어이해 홀수형/q29.review.json, data/reviews/2022 추리논증 짝수형/q06.review.json, data/reviews/2026 언어이해 홀수형/q12.review.json
 - Suggested correction rule: 핵심 용어 옆에 지문식 정의를 짧게 붙이고, 일상어 의미로 대체하지 않는다.
 
 ## `TIME_PRESSURE_OR_ATTENTION_LAPSE`

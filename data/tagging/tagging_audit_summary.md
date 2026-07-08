@@ -9,7 +9,7 @@
 - Needs-review records excluding holdouts: 2
 - Holdout records requiring later re-solve: 5
 - Records with missing canonical data: 0
-- Source JSON parse repairs used without modifying originals: 1
+- Source JSON parse repairs used without modifying originals: 0
 
 Holdout records remain visible in `provisional_tags.jsonl`, but they are not active evidence for the provisional taxonomy and are excluded from tag frequency and final-promotion analysis.
 
@@ -23,11 +23,11 @@ Holdout records remain visible in `provisional_tags.jsonl`, but they are not act
 | `FORMAL_CONDITION_ERROR` | 9 | 12 |
 | `CHOICE_VERIFICATION_FAILURE` | 8 | 12 |
 | `GLOBAL_CONSTRAINT_DROPPED` | 8 | 9 |
-| `TABLE_DIAGRAM_ENCODING_ERROR` | 6 | 11 |
-| `RELATION_DIRECTION_REVERSAL` | 5 | 8 |
+| `TABLE_DIAGRAM_ENCODING_ERROR` | 7 | 11 |
 | `ROLE_ATTRIBUTION_ERROR` | 4 | 5 |
-| `UNWARRANTED_ASSUMPTION_ADDED` | 3 | 8 |
-| `TEXTUAL_REDEFINITION_MISSED` | 2 | 7 |
+| `UNWARRANTED_ASSUMPTION_ADDED` | 3 | 9 |
+| `RELATION_DIRECTION_REVERSAL` | 3 | 8 |
+| `TEXTUAL_REDEFINITION_MISSED` | 3 | 8 |
 | `TIME_PRESSURE_OR_ATTENTION_LAPSE` | 2 | 6 |
 
 ## High-Confidence Recurring Tags
@@ -38,8 +38,7 @@ Holdout records remain visible in `provisional_tags.jsonl`, but they are not act
 - `FORMAL_CONDITION_ERROR`: 9 primary records
 - `CHOICE_VERIFICATION_FAILURE`: 8 primary records
 - `GLOBAL_CONSTRAINT_DROPPED`: 8 primary records
-- `TABLE_DIAGRAM_ENCODING_ERROR`: 6 primary records
-- `RELATION_DIRECTION_REVERSAL`: 5 primary records
+- `TABLE_DIAGRAM_ENCODING_ERROR`: 7 primary records
 
 ## Low-Confidence Or Unstable Tags
 
@@ -52,7 +51,7 @@ Holdout records remain visible in `provisional_tags.jsonl`, but they are not act
 
 | Review file | Reason |
 | --- | --- |
-| data/reviews/2020 추리논증 홀수형/q40.review.json | 원본 review JSON에 쉼표 누락이 있어 좁은 in-memory repair로 읽었다. narrow in-memory JSON repair: Expecting ',' delimiter: line 28 column 5 (char 1147) |
+| data/reviews/2020 추리논증 홀수형/q40.review.json | 원본 review JSON에 쉼표 누락이 있어 좁은 in-memory repair로 읽었다. |
 | data/reviews/2025 언어이해 짝수형/q21.review.json | 사용자의 독립 리뷰 근거가 부족해 세트 연쇄 오류 가설만 가능하다. |
 
 ## Holdout Records

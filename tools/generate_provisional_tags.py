@@ -40,10 +40,10 @@ class Assignment:
 TAG_DEFS: dict[str, dict[str, str]] = {
     "RELATION_DIRECTION_REVERSAL": {
         "ko": "관계 방향 전도",
-        "definition": "현재/목표, 원인/결과, 대상/표상, 주체/객체, 전/후처럼 방향성이 있는 관계를 반대로 잡은 오류.",
-        "positive": "열, 화살표, 비교 대상, 수식 대상, 교환·보상·통제의 방향이 바뀌었을 때 사용한다.",
-        "negative": "단순히 조건 하나를 빼먹은 경우에는 범위·조건 오적용 또는 전역 제약 누락을 우선한다.",
-        "neighbors": "TABLE_DIAGRAM_ENCODING_ERROR는 표·기호 입력 자체가 흔들릴 때, ROLE_ATTRIBUTION_ERROR는 주장·입장 귀속이 바뀔 때 우선한다.",
+        "definition": "A→B, 원인→결과, 주는 사람→받는 사람, 현재→목표, 입력→출력처럼 방향성이 명시된 관계를 반대로 잡은 오류.",
+        "positive": "화살표, 비교 방향, 수식 대상, 교환·보상·통제의 방향이 실제 선지 판단에서 뒤집혔을 때 사용한다.",
+        "negative": "명칭과 실제 속성을 혼동한 경우에는 TABLE_DIAGRAM_ENCODING_ERROR나 TEXTUAL_REDEFINITION_MISSED를 우선한다. 보완/대체 같은 방식어 오독은 TEXTUAL_REDEFINITION_MISSED를 우선한다.",
+        "neighbors": "TABLE_DIAGRAM_ENCODING_ERROR는 표·기호·변수 입력 자체가 흔들릴 때, TEXTUAL_REDEFINITION_MISSED는 지문식 정의나 방식어를 다른 뜻으로 처리했을 때 우선한다.",
         "rule": "방향어가 나오면 `A -> B` 형식으로 다시 쓰고, 선지가 같은 방향을 보존하는지 확인한다.",
     },
     "ROLE_ATTRIBUTION_ERROR": {
@@ -119,12 +119,12 @@ TAG_DEFS: dict[str, dict[str, str]] = {
         "rule": "문장 판단 전에 식, 부등호, 양화사, 분기 조건을 먼저 외부화한다.",
     },
     "TABLE_DIAGRAM_ENCODING_ERROR": {
-        "ko": "표·도식 인코딩 오류",
-        "definition": "표, 도식, 그래프, 실험표, 수치 단위, 부호, 기호 라벨을 재부호화하지 못하거나 잘못 읽은 오류.",
-        "positive": "현재/선호 열, ㉠·㉡ 라벨, 투과율/반사율, 점수/등수, 평균/분포, 실험 비교 변수를 잘못 인코딩했을 때 사용한다.",
-        "negative": "표는 맞게 읽었지만 전체 제약을 끝까지 유지하지 못했다면 GLOBAL_CONSTRAINT_DROPPED를 우선한다.",
-        "neighbors": "RELATION_DIRECTION_REVERSAL은 표 안 방향 전도가 핵심일 때 secondary로 자주 붙는다.",
-        "rule": "표·그래프를 선지로 가기 전에 한 줄 식이나 2x2 표로 다시 쓴다.",
+        "ko": "표·도식·변수 인코딩 오류",
+        "definition": "표, 도식, 그래프, 실험 설계, 변수 비교, 수치 임계값, 기호 라벨을 선지 판단 전에 올바른 문장·식·비교쌍으로 재부호화하지 못한 오류.",
+        "positive": "현재/선호 열, ㉠·㉡ 라벨, 투과율/반사율, 점수/등수, 평균/분포, 실험 비교 변수, 임계값을 잘못 인코딩했을 때 사용한다.",
+        "negative": "입력값은 맞게 읽었지만 전체 제약을 끝까지 유지하지 못했다면 GLOBAL_CONSTRAINT_DROPPED를 우선한다.",
+        "neighbors": "RELATION_DIRECTION_REVERSAL은 인코딩된 값의 방향만 뒤집힌 경우 secondary로 자주 붙는다. FORMAL_CONDITION_ERROR는 식 조작 자체가 핵심일 때 우선한다.",
+        "rule": "표·그래프·실험 설계는 선지로 가기 전에 한 줄 식, 2x2 표, 또는 변수 비교쌍으로 다시 쓴다.",
     },
     "TIME_PRESSURE_OR_ATTENTION_LAPSE": {
         "ko": "시간 압박·주의 저하",
@@ -160,7 +160,7 @@ ASSIGNMENTS: dict[str, Assignment] = {
     "data/reviews/2020 추리논증 홀수형/q30.review.json": Assignment("ARGUMENT_STRUCTURE_INCOMPLETE", (), "medium", "보조금 경쟁에서 요금 경쟁으로 이어지는 정책 인과사슬을 끊어 읽은 것으로 재구성된다."),
     "data/reviews/2020 추리논증 홀수형/q31.review.json": Assignment("UNWARRANTED_ASSUMPTION_ADDED", (), "high", "명시되지 않은 B등급 조건을 잔여범주로 임의 보충했다."),
     "data/reviews/2020 추리논증 홀수형/q33.review.json": Assignment("FORMAL_CONDITION_ERROR", ("GLOBAL_CONSTRAINT_DROPPED",), "high", "블록을 만든 뒤 남은 원소의 상대순서 자유도를 검산하지 않았다."),
-    "data/reviews/2020 추리논증 홀수형/q39.review.json": Assignment("RELATION_DIRECTION_REVERSAL", ("TABLE_DIAGRAM_ENCODING_ERROR",), "high", "양이온교환수지를 양전하 수지로 읽어 명칭과 실제 포획 대상의 방향을 전도했다."),
+    "data/reviews/2020 추리논증 홀수형/q39.review.json": Assignment("TABLE_DIAGRAM_ENCODING_ERROR", ("TEXTUAL_REDEFINITION_MISSED", "RELATION_DIRECTION_REVERSAL"), "high", "양이온교환수지 명칭을 지문식 부호표로 재인코딩하지 못하고 양전하 수지로 읽었다."),
     "data/reviews/2020 추리논증 홀수형/q40.review.json": Assignment("FORMAL_CONDITION_ERROR", (), "high", "전위차 조건을 절댓값 차이식이 아니라 합식처럼 세웠다.", True, "원본 review JSON에 쉼표 누락이 있어 좁은 in-memory repair로 읽었다."),
     "data/reviews/2021 언어이해 홀수형/q01.review.json": Assignment("CHOICE_VERIFICATION_FAILURE", (), "medium", "선지의 정오 방향을 마지막에 재확인하지 못한 것으로 리뷰가 정리한다."),
     "data/reviews/2021 언어이해 홀수형/q03.review.json": Assignment("SCOPE_CONDITION_MISAPPLICATION", (), "medium", "프로세스 마이닝 기능 적용 범위와 필요한 자료 여부를 분리하지 못했다."),
@@ -221,7 +221,7 @@ ASSIGNMENTS: dict[str, Assignment] = {
     "data/reviews/2025 추리논증 짝수형/q34.review.json": Assignment("INSUFFICIENT_REVIEW_BASIS", (), "low", "review 상태가 unreviewed이며 사고과정과 피드백이 비어 있다.", True, "사용자 self-review와 assistant feedback이 없어 canonical만으로 기제를 확정할 수 없다."),
     "data/reviews/2026 언어이해 홀수형/q06.review.json": Assignment("GLOBAL_CONSTRAINT_DROPPED", (), "high", "지역 행의 완결성이 아니라 전체 의사결정표의 입력공간 처리 여부를 봐야 했다."),
     "data/reviews/2026 언어이해 홀수형/q10.review.json": Assignment("SCOPE_CONDITION_MISAPPLICATION", (), "high", "노비 제외라는 예외 조건 누락을 허용 가능한 축약으로 처리했다."),
-    "data/reviews/2026 언어이해 홀수형/q12.review.json": Assignment("RELATION_DIRECTION_REVERSAL", ("TEXTUAL_REDEFINITION_MISSED",), "high", "제도 변화의 방식어인 보완·도입을 대체로 읽었다."),
+    "data/reviews/2026 언어이해 홀수형/q12.review.json": Assignment("TEXTUAL_REDEFINITION_MISSED", ("RELATION_DIRECTION_REVERSAL",), "high", "제도 변화의 방식어인 보완·도입을 대체로 읽어 지문식 변화 구조를 바꾸었다."),
     "data/reviews/2026 언어이해 홀수형/q15.review.json": Assignment("CONCEPT_LAYER_CONFUSION", ("ARGUMENT_STRUCTURE_INCOMPLETE",), "high", "인식 불가능성을 정보 부족이 아니라 개념상 성립 불가능을 보이는 귀류로 완성하지 못했다."),
     "data/reviews/2026 언어이해 홀수형/q17.review.json": Assignment("CONCEPT_LAYER_CONFUSION", ("UNWARRANTED_ASSUMPTION_ADDED",), "high", "정책·제도·기술·환경이라는 원인 범주를 같은 설명 경로로 묶고 배경 설명을 보충했다."),
     "data/reviews/2026 언어이해 홀수형/q21.review.json": Assignment("CONCEPT_LAYER_CONFUSION", ("ROLE_ATTRIBUTION_ERROR",), "high", "상대화되는 서구적 보편성과 탐색되는 인간적 보편성의 위치를 뒤집었다."),
@@ -234,7 +234,7 @@ ASSIGNMENTS: dict[str, Assignment] = {
     "data/reviews/2026 추리논증 홀수형/q21.review.json": Assignment("FORMAL_CONDITION_ERROR", (), "high", "0.91, 0.92, 0.92 이상처럼 가까운 수치 비교를 외부화하지 않았다."),
     "data/reviews/2026 추리논증 홀수형/q24.review.json": Assignment("SCOPE_CONDITION_MISAPPLICATION", ("TEXTUAL_REDEFINITION_MISSED",), "medium", "정책 시행 시 편익·비용 구조와 비개입 현상 자체를 구분하지 못했다."),
     "data/reviews/2026 추리논증 홀수형/q26.review.json": Assignment("FORMAL_CONDITION_ERROR", (), "high", "새 가격에서 비교해야 할 가격(X) <= 가격(Y) 관계 대신 초기 기준값 120과 비교했다."),
-    "data/reviews/2026 추리논증 홀수형/q29.review.json": Assignment("ARGUMENT_STRUCTURE_INCOMPLETE", (), "high", "A 이론 약화가 B 이론 강화를 자동으로 뜻하는지 별도 검증하지 않았다."),
+    "data/reviews/2026 추리논증 홀수형/q29.review.json": Assignment("ARGUMENT_STRUCTURE_INCOMPLETE", ("UNWARRANTED_ASSUMPTION_ADDED",), "high", "A 이론 약화가 B 이론 강화를 자동으로 뜻하는지 별도 검증하지 않고 두 이론의 상호배타성을 보충했다."),
 }
 
 
