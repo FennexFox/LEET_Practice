@@ -12,6 +12,19 @@ ROOT = Path(__file__).resolve().parents[1]
 REVIEWS_DIR = ROOT / "data" / "reviews"
 CANONICAL_DIR = ROOT / "data" / "canonical"
 OUT_DIR = ROOT / "data" / "tagging"
+HOLDOUT_RECORDS = {
+    "data/reviews/2025 추리논증 짝수형/q09.review.json",
+    "data/reviews/2025 추리논증 짝수형/q23.review.json",
+    "data/reviews/2025 추리논증 짝수형/q29.review.json",
+    "data/reviews/2025 추리논증 짝수형/q33.review.json",
+    "data/reviews/2025 추리논증 짝수형/q34.review.json",
+}
+HOLDOUT_REASON = (
+    "No user self-review or assistant feedback is available. The user chose not to "
+    "reconstruct the old reasoning from memory; this item should be re-solved later "
+    "and then re-reviewed."
+)
+HOLDOUT_REVISIT_PLAN = "resolve_after_retake"
 
 
 @dataclass(frozen=True)
@@ -331,6 +344,7 @@ def build_record(
     assignment: Assignment,
 ) -> dict[str, Any]:
     review_rel = rel(review_path)
+    holdout = review_rel in HOLDOUT_RECORDS
     grading = review.get("grading") or {}
     selected = grading.get("selected_choice")
     correct = grading.get("correct_choice")
@@ -435,6 +449,11 @@ def build_record(
         },
         "needs_review": bool(assignment.needs_review or parse_note),
         "needs_review_reason": needs_review_reason,
+        "holdout": holdout,
+        "holdout_reason": HOLDOUT_REASON if holdout else None,
+        "use_for_tag_frequency": not holdout,
+        "use_for_final_tag_promotion": not holdout,
+        "revisit_plan": HOLDOUT_REVISIT_PLAN if holdout else None,
     }
 
     return record
@@ -457,7 +476,10 @@ def write_dictionary(records: list[dict[str, Any]]) -> None:
     for record in records:
         tag = record["provisional_tags"]["primary"]
         if len(reps[tag]) < 4:
-            reps[tag].append(record["review_file"])
+            label = record["review_file"]
+            if record["holdout"]:
+                label = f"{label} (holdout)"
+            reps[tag].append(label)
 
     lines = [
         "# Provisional Tag Dictionary",
@@ -485,14 +507,24 @@ def write_dictionary(records: list[dict[str, Any]]) -> None:
 
 
 def write_summary(records: list[dict[str, Any]], review_count: int, parse_notes: list[str]) -> None:
-    primary_counts = Counter(record["provisional_tags"]["primary"] for record in records)
+    active_records = [record for record in records if record["use_for_tag_frequency"]]
+    holdout_records = [record for record in records if record["holdout"]]
+    needs_review_non_holdout = [
+        record for record in records if record["needs_review"] and not record["holdout"]
+    ]
+    holdout_needs_review = [record for record in holdout_records if record["needs_review"]]
+
+    primary_counts = Counter(record["provisional_tags"]["primary"] for record in active_records)
     all_counts = Counter()
-    for record in records:
+    for record in active_records:
         all_counts[record["provisional_tags"]["primary"]] += 1
         all_counts.update(record["provisional_tags"]["secondary"])
 
-    needs_review = [record for record in records if record["needs_review"]]
-    low_conf = [record for record in records if record["provisional_tags"]["confidence"] == "low"]
+    low_conf = [
+        record
+        for record in active_records
+        if record["provisional_tags"]["confidence"] == "low"
+    ]
     high_recurring = [
         (tag, count)
         for tag, count in primary_counts.most_common()
@@ -503,8 +535,14 @@ def write_summary(records: list[dict[str, Any]], review_count: int, parse_notes:
         freq_rows.append([f"`{tag}`", count, all_counts[tag]])
 
     needs_rows = [["Review file", "Reason"]]
-    for record in needs_review:
+    for record in needs_review_non_holdout:
         needs_rows.append([record["review_file"], record["needs_review_reason"]])
+
+    holdout_rows = [["Review file", "Reason", "Revisit plan"]]
+    for record in holdout_records:
+        holdout_rows.append(
+            [record["review_file"], record["holdout_reason"], record["revisit_plan"]]
+        )
 
     lines = [
         "# Provisional Tagging Audit Summary",
@@ -512,13 +550,17 @@ def write_summary(records: list[dict[str, Any]], review_count: int, parse_notes:
         "## Corpus Counts",
         "",
         f"- Review files inspected: {review_count}",
-        f"- Wrong-answer records tagged: {len(records)}",
-        "- Skipped correct-answer records: 0",
-        "- Records with missing or insufficient canonical data: 0",
-        f"- Records marked needs_review for review-basis or source-data issues: {len(needs_review)}",
+        f"- Wrong-answer records written: {len(records)}",
+        f"- Active records used for tag analysis: {len(active_records)}",
+        f"- Holdout records excluded from tag analysis: {len(holdout_records)}",
+        f"- Needs-review records excluding holdouts: {len(needs_review_non_holdout)}",
+        f"- Holdout records requiring later re-solve: {len(holdout_needs_review)}",
+        "- Records with missing canonical data: 0",
         f"- Source JSON parse repairs used without modifying originals: {len(parse_notes)}",
         "",
-        "## Tag Frequency Table",
+        "Holdout records remain visible in `provisional_tags.jsonl`, but they are not active evidence for the provisional taxonomy and are excluded from tag frequency and final-promotion analysis.",
+        "",
+        "## Active Tag Frequency Table",
         "",
         markdown_table(freq_rows),
         "",
@@ -534,26 +576,31 @@ def write_summary(records: list[dict[str, Any]], review_count: int, parse_notes:
             "",
             "## Low-Confidence Or Unstable Tags",
             "",
-            f"- Low-confidence records: {len(low_conf)}",
-            "- `INSUFFICIENT_REVIEW_BASIS` is intentionally unstable and should not be promoted as a final error mechanism.",
+            f"- Active low-confidence records: {len(low_conf)}",
+            "- Holdout records are excluded from this count and from final tag promotion.",
+            "- `INSUFFICIENT_REVIEW_BASIS` is a temporary data-quality tag and should not be promoted as a final error mechanism.",
             "- `CHOICE_VERIFICATION_FAILURE` should be reviewed carefully because it can become a secondary tag once a deeper mechanism is documented.",
             "",
-            "## Needs Review Records",
+            "## Needs Review Records Excluding Holdouts",
             "",
             markdown_table(needs_rows) if len(needs_rows) > 1 else "- None.",
+            "",
+            "## Holdout Records",
+            "",
+            markdown_table(holdout_rows) if len(holdout_rows) > 1 else "- None.",
             "",
             "## Recommended Merge/Split Candidates",
             "",
             "- Keep `SCOPE_CONDITION_MISAPPLICATION` separate from `GLOBAL_CONSTRAINT_DROPPED`: the former is about the scope of a condition, the latter about maintaining already-known global constraints.",
             "- Consider splitting `TABLE_DIAGRAM_ENCODING_ERROR` later if quantity/unit mistakes become frequent enough to justify a dedicated quantitative-unit tag.",
-            "- Do not promote `INSUFFICIENT_REVIEW_BASIS`; replace it after user self-review or assistant feedback is added.",
+            "- Do not promote `INSUFFICIENT_REVIEW_BASIS`; current instances are holdouts and must be replaced after re-solving and review.",
             "- Keep `TIME_PRESSURE_OR_ATTENTION_LAPSE` as primary only when the review itself identifies fatigue, time pressure, or direct input lapse as the main cause.",
             "",
             "## Next Steps",
             "",
-            "1. Review the needs_review records and add missing user self-review or assistant feedback before final promotion.",
+            "1. Re-solve the holdout records, then add user self-review and assistant feedback before assigning mechanism tags.",
             "2. Sample high-frequency tags against the original canonical question and passage records to confirm consistency.",
-            "3. Promote only stable mechanism tags into `final_error_tags`; leave operational or insufficient-basis tags out of final labels unless explicitly approved.",
+            "3. Promote only stable mechanism tags from active records into `final_error_tags`; leave operational, insufficient-basis, and holdout tags out of final labels unless explicitly approved.",
             "4. After promotion rules are settled, update the original review files in a separate, reviewed pass.",
             "",
         ]
@@ -606,6 +653,8 @@ def main() -> None:
 
     write_dictionary(records)
     write_summary(records, len(review_paths), parse_notes)
+    active_records = [record for record in records if record["use_for_tag_frequency"]]
+    holdout_records = [record for record in records if record["holdout"]]
     print(
         json.dumps(
             {
@@ -613,9 +662,14 @@ def main() -> None:
                 "records_written": len(records),
                 "output_dir": rel(OUT_DIR),
                 "needs_review": sum(1 for record in records if record["needs_review"]),
+                "needs_review_excluding_holdouts": sum(
+                    1 for record in records if record["needs_review"] and not record["holdout"]
+                ),
+                "active_records_used_for_tag_analysis": len(active_records),
+                "holdout_records": len(holdout_records),
                 "parse_repairs": parse_notes,
                 "primary_counts": Counter(
-                    record["provisional_tags"]["primary"] for record in records
+                    record["provisional_tags"]["primary"] for record in active_records
                 ),
             },
             ensure_ascii=False,

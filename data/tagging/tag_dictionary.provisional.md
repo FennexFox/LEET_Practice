@@ -59,7 +59,7 @@ These tags are provisional mechanism labels for review and later promotion. They
 - Positive criteria: unreviewed 상태이거나 self-review와 assistant feedback이 모두 없어 오답 메커니즘을 재구성할 수 없을 때 사용한다.
 - Negative criteria: 리뷰 근거가 조금이라도 있어 낮은 확신의 기제 진단이 가능한 경우에는 해당 기제 태그와 low confidence를 사용한다.
 - Neighboring tags: needs_review=true와 함께 사용하며, final_error_tags로 승격하지 않는 임시 품질 태그다.
-- Representative review files: data/reviews/2025 추리논증 짝수형/q09.review.json, data/reviews/2025 추리논증 짝수형/q23.review.json, data/reviews/2025 추리논증 짝수형/q29.review.json, data/reviews/2025 추리논증 짝수형/q33.review.json
+- Representative review files: data/reviews/2025 추리논증 짝수형/q09.review.json (holdout), data/reviews/2025 추리논증 짝수형/q23.review.json (holdout), data/reviews/2025 추리논증 짝수형/q29.review.json (holdout), data/reviews/2025 추리논증 짝수형/q33.review.json (holdout)
 - Suggested correction rule: canonical만으로 선택 이유를 추정하지 말고, 사용자 복기 또는 피드백 확보 후 다시 태깅한다.
 
 ## `RELATION_DIRECTION_REVERSAL`
