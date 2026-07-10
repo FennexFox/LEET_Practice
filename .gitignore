@@ -61,6 +61,10 @@ artifacts/**
 !artifacts/
 !artifacts/.gitkeep
 
+output/**
+!output/
+!output/.gitkeep
+
 # Local databases
 *.sqlite
 *.sqlite3

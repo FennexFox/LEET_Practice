@@ -4,8 +4,9 @@ import html
 import json
 import re
 from collections import Counter, defaultdict
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import quote
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +44,17 @@ SECTION_IDS = [
     "representative-cases",
     "audit",
 ]
+NAV_LABELS = {
+    "overview": "Overview",
+    "tag-frequency": "Frequency",
+    "final-tags": "Final Tags",
+    "supporting-status-tags": "Support Tags",
+    "year-section-breakdown": "Years",
+    "records-table": "Records",
+    "review-queue": "Queue",
+    "representative-cases": "Cases",
+    "audit": "Audit",
+}
 
 
 def load_records(path: Path = RECORDS_PATH) -> list[dict[str, Any]]:
@@ -75,10 +87,10 @@ def parse_provisional_doc(path: Path = PROVISIONAL_TAG_DOC) -> dict[str, dict[st
         return {}
     text = path.read_text(encoding="utf-8")
     tags: dict[str, dict[str, str]] = {}
-    for match in re.finditer(r"^## `([^`]+)`\s*$", text, re.MULTILINE):
+    for match in re.finditer(r"^#{2,3} `([^`]+)`\s*$", text, re.MULTILINE):
         tag_id = match.group(1)
         start = match.end()
-        next_match = re.search(r"^## `", text[start:], re.MULTILINE)
+        next_match = re.search(r"^#{2,3} `", text[start:], re.MULTILINE)
         end = start + next_match.start() if next_match else len(text)
         bullets = _parse_bullets(text[start:end])
         tags[tag_id] = {
@@ -223,7 +235,7 @@ def compute_tag_frequency(records: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 
 def select_representative_cases(
-    records: list[dict[str, Any]], tag_id: str, limit: int = 4
+    records: list[dict[str, Any]], tag_id: str, limit: int | None = 4
 ) -> list[dict[str, Any]]:
     active = [
         record
@@ -244,7 +256,7 @@ def select_representative_cases(
             record.get("question_no") or 999,
         )
     )
-    return active[:limit]
+    return active if limit is None else active[:limit]
 
 
 def compute_year_section_breakdown(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -345,6 +357,23 @@ def render_record_link(record: dict[str, Any]) -> str:
     return f"{h(record.get('year'))} {h(record.get('section'))} q{int(record.get('question_no') or 0):02d}"
 
 
+def review_href(record: dict[str, Any]) -> str:
+    return "/review?file=" + quote(str(record.get("review_file") or ""), safe="")
+
+
+def review_label(record: dict[str, Any]) -> str:
+    review_file = str(record.get("review_file") or "")
+    path = PurePosixPath(review_file.replace("\\", "/"))
+    qid = path.name.removesuffix(".review.json")
+    if path.parent.name and qid:
+        return f"{path.parent.name} {qid}"
+    return f"{record.get('year')} {record.get('section')} q{int(record.get('question_no') or 0):02d}"
+
+
+def render_review_file_link(record: dict[str, Any]) -> str:
+    return f'<a class="review-link" href="{h(review_href(record))}">{h(review_label(record))}</a>'
+
+
 def build_dashboard_html(
     records: list[dict[str, Any]],
     stats: dict[str, Any],
@@ -356,6 +385,9 @@ def build_dashboard_html(
     review_queue = compute_review_queue(records, metadata)
     final_reps = {
         tag_id: select_representative_cases(records, tag_id, limit=4) for tag_id in FINAL_V1_TAGS
+    }
+    final_card_cases = {
+        tag_id: select_representative_cases(records, tag_id, limit=None) for tag_id in FINAL_V1_TAGS
     }
     years = sorted({record.get("year") for record in records if record.get("year") is not None})
     sections = sorted({record.get("section") for record in records if record.get("section")})
@@ -391,13 +423,13 @@ def build_dashboard_html(
         f"""
         <article class="tag-card">
           <header>{render_tag_badge(tag_id, metadata)}<span>{h(metadata[tag_id].get('korean'))}</span></header>
-          <p>{h(metadata[tag_id].get('definition'))}</p>
+          <p class="tag-definition">{h(metadata[tag_id].get('definition'))}</p>
           <dl>
             <div><dt>Primary</dt><dd>{next((row['primary_count'] for row in tag_frequency if row['tag_id'] == tag_id), 0)}</dd></div>
             <div><dt>Primary + secondary</dt><dd>{next((row['all_count'] for row in tag_frequency if row['tag_id'] == tag_id), 0)}</dd></div>
           </dl>
           <p class="rule">{h(metadata[tag_id].get('correction_rule'))}</p>
-          <ul>{''.join(f'<li>{h(case["review_file"])}</li>' for case in final_reps[tag_id][:3])}</ul>
+          <ul class="tag-card-cases">{''.join(f'<li>{render_review_file_link(case)}</li>' for case in final_card_cases[tag_id])}</ul>
         </article>
         """
         for tag_id in FINAL_V1_TAGS
@@ -407,7 +439,7 @@ def build_dashboard_html(
         f"""
         <article class="tag-card supporting-card">
           <header>{render_tag_badge(tag_id, metadata)}<span>{h(metadata[tag_id].get('role'))}</span></header>
-          <p>{h(metadata[tag_id].get('definition'))}</p>
+          <p class="tag-definition">{h(metadata[tag_id].get('definition'))}</p>
           <p class="rule">{h(metadata[tag_id].get('correction_rule'))}</p>
           <p class="note">Not normally promoted as a primary final error mechanism.</p>
         </article>
@@ -424,7 +456,7 @@ def build_dashboard_html(
         f"""
         <article class="queue-block">
           <h3>{h(title)} <span>{len(items)}</span></h3>
-          <ul>{''.join(f'<li><strong>{render_record_link(record)}</strong> {h(record["review_file"])} <em>{h(record["provisional_tags"]["primary"])}</em></li>' for record in items)}</ul>
+          <ul>{''.join(f'<li><strong>{render_record_link(record)}</strong> {render_review_file_link(record)} <em>{h(record["provisional_tags"]["primary"])}</em></li>' for record in items)}</ul>
         </article>
         """
         for title, items in [
@@ -461,7 +493,7 @@ def build_dashboard_html(
 <body>
   <header class="app-header">
     <h1>LEET Tagging Dashboard</h1>
-    <nav>{''.join(f'<a href="#{section_id}">{section_id.replace("-", " ").title()}</a>' for section_id in SECTION_IDS)}</nav>
+    <nav>{''.join(f'<a href="#{section_id}">{h(NAV_LABELS[section_id])}</a>' for section_id in SECTION_IDS)}</nav>
   </header>
   <main>
     <section id="overview">
@@ -480,7 +512,7 @@ def build_dashboard_html(
     <section id="tag-frequency">
       <h2>Active Tag Frequency</h2>
       <p>Computed only from records where <code>use_for_tag_frequency</code> is true.</p>
-      <table><thead><tr><th>Tag</th><th>Role</th><th>Primary</th><th>Primary + secondary</th><th>% active primary</th></tr></thead><tbody>{frequency_rows}</tbody></table>
+      <div class="table-scroll"><table><thead><tr><th>Tag</th><th>Role</th><th>Primary</th><th>Primary + secondary</th><th>% active primary</th></tr></thead><tbody>{frequency_rows}</tbody></table></div>
     </section>
 
     <section id="final-tags">
@@ -495,7 +527,7 @@ def build_dashboard_html(
 
     <section id="year-section-breakdown">
       <h2>Year × Section Breakdown</h2>
-      <table><thead><tr><th>Year</th><th>Section</th><th>Active records</th><th>Most frequent primary tags</th></tr></thead><tbody>{breakdown_rows}</tbody></table>
+      <div class="table-scroll"><table><thead><tr><th>Year</th><th>Section</th><th>Active records</th><th>Most frequent primary tags</th></tr></thead><tbody>{breakdown_rows}</tbody></table></div>
     </section>
 
     <section id="records-table">
@@ -509,11 +541,13 @@ def build_dashboard_html(
         <label><input id="hideHoldouts" type="checkbox"> Hide holdouts</label>
         <label><input id="needsOnly" type="checkbox"> Needs-review only</label>
       </div>
-      <div class="table-note"><span id="recordCount"></span></div>
-      <table id="recordsTable">
-        <thead><tr><th>Year</th><th>Section</th><th>Q</th><th>Review file</th><th>Selected</th><th>Correct</th><th>Primary tag</th><th>Secondary</th><th>Confidence</th><th>Needs review</th><th>Holdout</th><th>Use frequency</th><th>Use promotion</th><th>Rationale</th></tr></thead>
-        <tbody></tbody>
-      </table>
+      <div class="table-note"><span id="recordCount"></span><span class="scroll-hint"> Scroll sideways for tags and rationale.</span></div>
+      <div class="table-scroll records-scroll">
+        <table id="recordsTable">
+          <thead><tr><th>Year</th><th>Section</th><th>Q</th><th>Review file</th><th>Selected</th><th>Correct</th><th>Primary tag</th><th>Secondary</th><th>Confidence</th><th>Needs review</th><th>Holdout</th><th>Use frequency</th><th>Use promotion</th><th>Rationale</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </section>
 
     <section id="review-queue">
@@ -528,7 +562,7 @@ def build_dashboard_html(
 
     <section id="audit">
       <h2>Data Integrity / Audit</h2>
-      <table><tbody>{audit_rows}</tbody></table>
+      <div class="table-scroll"><table><tbody>{audit_rows}</tbody></table></div>
     </section>
   </main>
   <script id="dashboard-data" type="application/json">{html.escape(json.dumps(dashboard_data, ensure_ascii=False), quote=False)}</script>
@@ -536,6 +570,32 @@ def build_dashboard_html(
 </body>
 </html>
 """
+
+
+def build_dashboard_data() -> dict[str, Any]:
+    records = load_records()
+    metadata = classify_tags()
+    audit = validate_records(records, metadata)
+    stats = compute_counts(records, metadata)
+    tag_frequency = compute_tag_frequency(records)
+    return {
+        "records": records,
+        "metadata": metadata,
+        "stats": stats,
+        "tagFrequency": tag_frequency,
+        "audit": audit,
+    }
+
+
+def build_current_dashboard_html() -> str:
+    dashboard_data = build_dashboard_data()
+    return build_dashboard_html(
+        dashboard_data["records"],
+        dashboard_data["stats"],
+        dashboard_data["metadata"],
+        dashboard_data["tagFrequency"],
+        dashboard_data["audit"],
+    )
 
 
 def render_case_details(record: dict[str, Any]) -> str:
@@ -549,7 +609,8 @@ def render_case_details(record: dict[str, Any]) -> str:
     )
     return f"""
     <details>
-      <summary>{h(summary)} - {h(record.get('review_file'))}</summary>
+      <summary>{h(summary)} - {h(review_label(record))}</summary>
+      <p>{render_review_file_link(record)}</p>
       <p><strong>Rationale:</strong> {h(record.get('tag_rationale'))}</p>
       <p><strong>User self-diagnosis:</strong> {h(review.get('user_self_diagnosis_summary'))}</p>
       <p><strong>Assistant feedback:</strong> {h(review.get('assistant_feedback_summary'))}</p>
@@ -578,27 +639,36 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 .app-header h1 { margin: 0 0 10px; font-size: 24px; letter-spacing: 0; }
 nav { display: flex; flex-wrap: wrap; gap: 8px; }
 nav a { color: var(--accent); text-decoration: none; font-size: 13px; border: 1px solid var(--line); padding: 5px 8px; border-radius: 6px; background: #fff; }
+a { color: var(--accent); }
+.review-link { font-family: var(--mono); overflow-wrap: anywhere; }
 main { max-width: 1500px; margin: 0 auto; padding: 20px 24px 48px; }
-section { margin: 0 0 26px; }
+section { margin: 0 0 26px; scroll-margin-top: 110px; }
 h2 { font-size: 20px; margin: 0 0 12px; }
 h3 { font-size: 15px; margin: 0 0 10px; }
 p { line-height: 1.45; }
 code { font-family: var(--mono); background: #efefeb; padding: 1px 4px; border-radius: 4px; }
 .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
 .metric, .tag-card, .queue-block { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
-.metric span { display: block; color: var(--muted); font-size: 12px; }
+.metric span { display: block; min-height: 34px; color: var(--muted); font-size: 12px; line-height: 1.35; }
 .metric strong { display: block; font-size: 28px; margin-top: 4px; }
 table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); }
 th, td { border-bottom: 1px solid var(--line); padding: 8px; text-align: left; vertical-align: top; font-size: 13px; }
-th { background: #efefeb; position: sticky; top: 84px; z-index: 1; }
+th { background: #efefeb; }
+.table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.table-scroll table { border: 0; min-width: 720px; }
+.records-scroll table { min-width: 1260px; }
 .tag-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
-.tag-card header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.tag-card header { display: grid; gap: 6px; min-height: 48px; margin-bottom: 8px; }
+.tag-card header span:not(.tag-badge) { font-weight: 700; line-height: 1.25; }
 .tag-card p { margin: 8px 0; }
+.tag-definition { min-height: 104px; }
 .tag-card dl { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0; }
 .tag-card dl div { background: #f4f4f1; border-radius: 6px; padding: 8px; }
 .tag-card dt { color: var(--muted); font-size: 12px; }
 .tag-card dd { margin: 2px 0 0; font-weight: 700; }
 .tag-card ul { margin: 8px 0 0; padding-left: 18px; }
+.tag-card-cases { max-height: 116px; overflow-y: auto; padding-right: 6px; }
+.tag-card-cases li { margin-bottom: 5px; }
 .rule { color: #3f3f3f; font-size: 13px; }
 .note { color: var(--warn); font-weight: 600; }
 .tag-badge { display: inline-block; font-family: var(--mono); font-size: 12px; border-radius: 999px; padding: 3px 7px; border: 1px solid var(--line); background: #f4f4f1; }
@@ -607,9 +677,16 @@ th { background: #efefeb; position: sticky; top: 84px; z-index: 1; }
 .tag-badge.status { background: #fff7ed; border-color: #fdba74; color: #9a3412; }
 .filters { display: grid; grid-template-columns: minmax(220px, 1fr) repeat(4, minmax(120px, 180px)) auto auto; gap: 8px; align-items: center; margin-bottom: 10px; }
 .filters input, .filters select { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 7px; background: #fff; }
-.filters label { font-size: 13px; white-space: nowrap; }
+.filters label { display: flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; }
+.filters label input { width: auto; }
 .table-note { color: var(--muted); margin: 8px 0; }
-#recordsTable td:nth-child(4), #recordsTable td:nth-child(14) { max-width: 320px; overflow-wrap: anywhere; }
+.scroll-hint { display: none; }
+#recordsTable td:nth-child(4) { max-width: 220px; overflow-wrap: anywhere; }
+#recordsTable td:nth-child(7), #recordsTable td:nth-child(8) { font-family: var(--mono); font-size: 12px; }
+#recordsTable td:nth-child(14) { width: 280px; max-width: 280px; }
+.rationale-summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+.rationale-details[open] .rationale-summary { margin-bottom: 6px; }
+.rationale-text { color: var(--text); line-height: 1.38; max-height: 170px; overflow: auto; padding-right: 4px; }
 .queue-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
 .queue-block h3 { display: flex; justify-content: space-between; }
 .queue-block ul { margin: 0; padding-left: 18px; }
@@ -620,7 +697,22 @@ details { background: var(--panel); border: 1px solid var(--line); border-radius
 summary { cursor: pointer; font-weight: 600; }
 @media (max-width: 900px) {
   .filters { grid-template-columns: 1fr 1fr; }
-  th { position: static; }
+}
+@media (max-width: 700px) {
+  .app-header { padding: 14px 16px 12px; }
+  .app-header h1 { font-size: 23px; }
+  nav { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+  nav a { flex: 0 0 auto; }
+  main { padding: 20px 16px 40px; }
+  section { scroll-margin-top: 96px; }
+  .metrics { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .metric { min-height: 92px; padding: 12px; }
+  .metric span { min-height: 32px; font-size: 11px; }
+  .metric strong { font-size: 26px; }
+  .tag-grid, .queue-grid { grid-template-columns: 1fr; }
+  .filters { grid-template-columns: 1fr; }
+  .filters label { justify-content: flex-start; white-space: normal; }
+  .scroll-hint { display: inline; }
 }
 """
 
@@ -636,6 +728,45 @@ function cell(value) {
   const td = document.createElement('td');
   td.textContent = value == null ? '' : String(value);
   return td;
+}
+
+function linkCell(label, href) {
+  const td = document.createElement('td');
+  const anchor = document.createElement('a');
+  anchor.href = href;
+  anchor.textContent = label == null ? '' : String(label);
+  anchor.className = 'review-link';
+  td.appendChild(anchor);
+  return td;
+}
+
+function rationaleCell(value) {
+  const td = document.createElement('td');
+  const details = document.createElement('details');
+  details.className = 'rationale-details';
+  const summary = document.createElement('summary');
+  summary.className = 'rationale-summary';
+  summary.textContent = 'Read rationale';
+  const text = document.createElement('div');
+  text.className = 'rationale-text';
+  text.textContent = value == null ? '' : String(value);
+  details.append(summary, text);
+  td.appendChild(details);
+  return td;
+}
+
+function reviewHref(record) {
+  return `/review?file=${encodeURIComponent(record.review_file)}`;
+}
+
+function reviewLabel(record) {
+  const parts = String(record.review_file || '').split('/');
+  const filename = parts.pop() || '';
+  const parent = parts.pop() || '';
+  const qid = filename.replace(/\\.review\\.json$/, '');
+  if (parent && qid) return `${parent} ${qid}`;
+  const qno = String(record.question_no || 0).padStart(2, '0');
+  return `${record.year} ${record.section} q${qno}`;
 }
 
 function matches(record) {
@@ -661,14 +792,17 @@ function renderRows() {
   for (const record of rows) {
     const tr = document.createElement('tr');
     [
-      record.year, record.section, record.question_no, record.review_file,
+      record.year, record.section, record.question_no
+    ].forEach(value => tr.appendChild(cell(value)));
+    tr.appendChild(linkCell(reviewLabel(record), reviewHref(record)));
+    [
       record.selected_choice, record.correct_choice, record.provisional_tags.primary,
       (record.provisional_tags.secondary || []).join(', '), record.provisional_tags.confidence,
       record.needs_review ? 'yes' : 'no', record.holdout ? 'yes' : 'no',
       record.use_for_tag_frequency ? 'yes' : 'no',
-      record.use_for_final_tag_promotion ? 'yes' : 'no',
-      record.tag_rationale
+      record.use_for_final_tag_promotion ? 'yes' : 'no'
     ].forEach(value => tr.appendChild(cell(value)));
+    tr.appendChild(rationaleCell(record.tag_rationale));
     tbody.appendChild(tr);
   }
   recordCount.textContent = `${rows.length} of ${data.records.length} records shown`;
@@ -687,13 +821,21 @@ def validate_html(output: str) -> None:
         raise ValueError(f"Generated dashboard missing section anchors: {missing}")
 
 
+def normalize_html_output(output: str) -> str:
+    return "\n".join(line.rstrip() for line in output.splitlines()) + "\n"
+
+
 def main() -> None:
-    records = load_records()
-    metadata = classify_tags()
-    audit = validate_records(records, metadata)
-    stats = compute_counts(records, metadata)
-    tag_frequency = compute_tag_frequency(records)
-    output = build_dashboard_html(records, stats, metadata, tag_frequency, audit)
+    dashboard_data = build_dashboard_data()
+    stats = dashboard_data["stats"]
+    output = build_dashboard_html(
+        dashboard_data["records"],
+        stats,
+        dashboard_data["metadata"],
+        dashboard_data["tagFrequency"],
+        dashboard_data["audit"],
+    )
+    output = normalize_html_output(output)
     validate_html(output)
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT_PATH.write_text(output, encoding="utf-8", newline="\n")

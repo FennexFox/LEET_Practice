@@ -96,6 +96,25 @@ The initial CLI is only a placeholder:
 leet-practice --help
 ```
 
+## Tagging dashboard
+
+Run the live local dashboard when reviewing provisional tags:
+
+```bash
+python tools/serve_tagging_dashboard.py
+```
+
+Open `http://127.0.0.1:8765/`. The server reads `data/tagging/*.jsonl` and
+tag dictionary Markdown files on each request, so refresh the browser after
+editing local tagging data. The same live payload is available at
+`/api/dashboard`.
+
+For a standalone snapshot, regenerate the static HTML file:
+
+```bash
+python tools/build_tagging_dashboard.py
+```
+
 ## Design direction
 
 The project should grow in this order:
