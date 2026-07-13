@@ -6,6 +6,7 @@ import sys
 from collections import Counter
 from http import HTTPStatus
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -96,6 +97,36 @@ def test_dashboard_review_links_use_readable_labels_and_scrollable_final_cards()
 
     assert card.count("/review?file=") == expected_cases
     assert expected_cases > 3
+
+
+def test_dashboard_polished_workspace_controls_and_frequency_bars():
+    builder = load_builder()
+    html = builder.build_current_dashboard_html()
+
+    assert 'class="overview-intro"' in html
+    assert 'class="frequency-track"' in html
+    assert 'id="resetFilters"' in html
+    assert 'aria-label="Dashboard sections"' in html
+    assert "linked cases</summary>" in html
+    assert '<caption class="sr-only">Filterable tagging evidence records</caption>' in html
+    assert 'scope="col"' in html
+    assert "No records match these filters" in html
+
+
+def test_dashboard_retry_pdf_controls_and_persistent_selection():
+    builder = load_builder()
+    html = builder.build_current_dashboard_html()
+
+    assert 'id="recommendSelection"' in html
+    assert 'id="selectVisible"' in html
+    assert 'id="clearSelection"' in html
+    assert 'id="includeHoldouts"' in html
+    assert 'id="retryLimit"' in html
+    assert 'id="generateRetryPdf"' in html
+    assert "const selectedFiles = new Set()" in html
+    assert "recommendRecords(filteredRecords(), retryLimit())" in html
+    assert "fetch('/api/retry-pdf'" in html
+    assert 'className = \'row-selector\'' in html
 
 
 def test_dashboard_frequency_after_v1_corrections():
@@ -238,3 +269,109 @@ def test_live_review_page_rejects_outside_paths():
 
     with pytest.raises(ValueError):
         serve_tagging_dashboard.resolve_review_path("../README.md")
+
+
+def test_retry_pdf_payload_validates_allowlisted_review_files():
+    if str(TOOLS_DIR) not in sys.path:
+        sys.path.insert(0, str(TOOLS_DIR))
+
+    import pytest
+    import serve_tagging_dashboard
+
+    records = load_records()
+    active = next(record for record in records if not record["holdout"])
+    result = serve_tagging_dashboard.validate_retry_pdf_payload(
+        {
+            "review_files": [active["review_file"], active["review_file"]],
+            "limit": 20,
+            "include_holdout": False,
+            "title": "Focused retry",
+        }
+    )
+
+    assert result["review_files"] == [active["review_file"]]
+    assert result["limit"] == 20
+
+    with pytest.raises(ValueError, match="Unknown review_file"):
+        serve_tagging_dashboard.validate_retry_pdf_payload(
+            {"review_files": ["data/reviews/not-in-dashboard.review.json"]}
+        )
+    with pytest.raises(ValueError, match="Unknown fields"):
+        serve_tagging_dashboard.validate_retry_pdf_payload({"output_path": "../escape.pdf"})
+
+
+def test_retry_pdf_payload_requires_explicit_holdout_opt_in():
+    if str(TOOLS_DIR) not in sys.path:
+        sys.path.insert(0, str(TOOLS_DIR))
+
+    import pytest
+    import serve_tagging_dashboard
+
+    holdout = next(record for record in load_records() if record["holdout"])
+    with pytest.raises(ValueError, match="include_holdout=true"):
+        serve_tagging_dashboard.validate_retry_pdf_payload(
+            {"review_files": [holdout["review_file"]], "include_holdout": False}
+        )
+
+    result = serve_tagging_dashboard.validate_retry_pdf_payload(
+        {"review_files": [holdout["review_file"]], "include_holdout": True}
+    )
+    assert result["review_files"] == [holdout["review_file"]]
+
+
+def test_retry_pdf_response_calls_shared_generator(monkeypatch):
+    if str(TOOLS_DIR) not in sys.path:
+        sys.path.insert(0, str(TOOLS_DIR))
+
+    import serve_tagging_dashboard
+
+    active = next(record for record in load_records() if not record["holdout"])
+    captured = {}
+
+    class FakeRetryPdfError(Exception):
+        pass
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            pdf_path=Path("output/retry-pdfs/example.pdf"),
+            manifest_path=Path("output/retry-pdfs/example.json"),
+            selected=[{"review_file": active["review_file"]}],
+            skipped=[],
+        )
+
+    monkeypatch.setattr(
+        serve_tagging_dashboard,
+        "_load_retry_pdf_api",
+        lambda: (fake_create, FakeRetryPdfError),
+    )
+    monkeypatch.setattr(
+        serve_tagging_dashboard,
+        "_output_reference",
+        lambda path: (Path(path).as_posix(), f"/download?file={Path(path).name}"),
+    )
+
+    response = serve_tagging_dashboard.create_retry_pdf_response(
+        {"review_files": [active["review_file"]], "title": "Focused retry"}
+    )
+
+    assert captured["data_root"] == ROOT / "data"
+    assert captured["review_files"] == [active["review_file"]]
+    assert captured["output_path"].is_relative_to(ROOT / "output")
+    assert captured["output_path"].suffix == ".pdf"
+    assert captured["font_path"] is None
+    assert response["selected_count"] == 1
+    assert response["pdf_url"].startswith("/download?")
+
+
+def test_retry_pdf_download_rejects_paths_outside_output():
+    if str(TOOLS_DIR) not in sys.path:
+        sys.path.insert(0, str(TOOLS_DIR))
+
+    import pytest
+    import serve_tagging_dashboard
+
+    with pytest.raises(ValueError, match="output directory"):
+        serve_tagging_dashboard.resolve_output_file("README.md", must_exist=False)
+    with pytest.raises(ValueError, match="PDF and JSON"):
+        serve_tagging_dashboard.resolve_output_file("output/retry-pdfs/notes.txt", must_exist=False)

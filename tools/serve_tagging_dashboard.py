@@ -1,19 +1,25 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import re
+import sys
+from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import build_tagging_dashboard as dashboard
 
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
+MAX_REQUEST_BYTES = 64 * 1024
+MAX_RETRY_QUESTIONS = 100
+OUTPUT_ROOT = (dashboard.ROOT / "output").resolve()
 LANGUAGE_SECTION = "\uc5b8\uc5b4\uc774\ud574"
 REASONING_SECTION = "\ucd94\ub9ac\ub17c\uc99d"
 SECTION_ALIASES = {
@@ -39,7 +45,27 @@ class TaggingDashboardHandler(BaseHTTPRequestHandler):
         if path == "/healthz":
             self._send_json({"ok": True})
             return
+        if path == "/download":
+            self._send_download()
+            return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+
+    def do_POST(self) -> None:
+        if urlparse(self.path).path != "/api/retry-pdf":
+            self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+            return
+        try:
+            payload = self._read_json_request()
+            response = create_retry_pdf_response(payload)
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            self._send_error(exc, wants_json=True, status=HTTPStatus.BAD_REQUEST)
+            return
+        except Exception as exc:
+            retry_error = retry_pdf_error_type()
+            status = HTTPStatus.UNPROCESSABLE_ENTITY if isinstance(exc, retry_error) else HTTPStatus.INTERNAL_SERVER_ERROR
+            self._send_error(exc, wants_json=True, status=status)
+            return
+        self._send_json(response, status=HTTPStatus.CREATED)
 
     def log_message(self, format: str, *args: object) -> None:
         print(f"{self.address_string()} - {format % args}")
@@ -71,15 +97,56 @@ class TaggingDashboardHandler(BaseHTTPRequestHandler):
             return
         self._send_json(payload)
 
+    def _read_json_request(self) -> object:
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.lower().startswith("application/json"):
+            raise ValueError("Content-Type must be application/json")
+        raw_length = self.headers.get("Content-Length")
+        if raw_length is None:
+            raise ValueError("Content-Length is required")
+        try:
+            length = int(raw_length)
+        except ValueError as exc:
+            raise ValueError("Invalid Content-Length") from exc
+        if length < 1 or length > MAX_REQUEST_BYTES:
+            raise ValueError(f"JSON body must be between 1 and {MAX_REQUEST_BYTES} bytes")
+        return json.loads(self.rfile.read(length).decode("utf-8"))
+
+    def _send_download(self) -> None:
+        query = parse_qs(urlparse(self.path).query)
+        requested = (query.get("file") or [""])[0]
+        try:
+            path = resolve_output_file(requested, must_exist=True)
+        except ValueError as exc:
+            self._send_error(exc, wants_json=False, status=HTTPStatus.BAD_REQUEST)
+            return
+        except FileNotFoundError as exc:
+            self._send_error(exc, wants_json=False, status=HTTPStatus.NOT_FOUND)
+            return
+        content_type = "application/pdf" if path.suffix.lower() == ".pdf" else "application/json; charset=utf-8"
+        body = path.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(path.name)}")
+        self.end_headers()
+        self.wfile.write(body)
+
     def _send_json(self, payload: object, status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
         self._send_bytes(body, "application/json; charset=utf-8", status=status)
 
-    def _send_error(self, exc: Exception, wants_json: bool) -> None:
+    def _send_error(
+        self,
+        exc: Exception,
+        wants_json: bool,
+        status: HTTPStatus = HTTPStatus.INTERNAL_SERVER_ERROR,
+    ) -> None:
         if wants_json:
             self._send_json(
                 {"error": type(exc).__name__, "message": str(exc)},
-                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                status=status,
             )
             return
         body = (
@@ -88,7 +155,7 @@ class TaggingDashboardHandler(BaseHTTPRequestHandler):
             "<h1>Dashboard error</h1>"
             f"<pre>{type(exc).__name__}: {dashboard.h(str(exc))}</pre>"
         ).encode("utf-8")
-        self._send_bytes(body, "text/html; charset=utf-8", status=HTTPStatus.INTERNAL_SERVER_ERROR)
+        self._send_bytes(body, "text/html; charset=utf-8", status=status)
 
     def _send_bytes(
         self,
@@ -102,6 +169,205 @@ class TaggingDashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+
+def _load_retry_pdf_api() -> tuple[Any, type[Exception]]:
+    try:
+        from leet_practice.retry_pdf import RetryPdfError, create_retry_pdf_bundle
+    except ModuleNotFoundError:
+        src_dir = dashboard.ROOT / "src"
+        if str(src_dir) not in sys.path:
+            sys.path.insert(0, str(src_dir))
+        from leet_practice.retry_pdf import RetryPdfError, create_retry_pdf_bundle
+    return create_retry_pdf_bundle, RetryPdfError
+
+
+def retry_pdf_error_type() -> type[Exception]:
+    try:
+        return _load_retry_pdf_api()[1]
+    except (ImportError, ModuleNotFoundError):
+        return RuntimeError
+
+
+def _validate_string_list(
+    payload: dict[str, Any],
+    field: str,
+    allowed: set[str],
+) -> list[str] | None:
+    value = payload.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise TypeError(f"{field} must be a list of strings")
+    normalized = list(dict.fromkeys(item.strip() for item in value if item.strip()))
+    unknown = sorted(set(normalized) - allowed)
+    if unknown:
+        raise ValueError(f"Unknown {field}: {', '.join(unknown)}")
+    return normalized or None
+
+
+def validate_retry_pdf_payload(payload: object) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise TypeError("JSON body must be an object")
+    allowed_fields = {
+        "review_files",
+        "limit",
+        "tags",
+        "years",
+        "sections",
+        "include_holdout",
+        "title",
+    }
+    unknown_fields = sorted(set(payload) - allowed_fields)
+    if unknown_fields:
+        raise ValueError(f"Unknown fields: {', '.join(unknown_fields)}")
+
+    records = dashboard.load_records()
+    records_by_file = {
+        str(record.get("review_file") or "").replace("\\", "/"): record
+        for record in records
+    }
+    raw_review_files = payload.get("review_files")
+    review_files: list[str] | None
+    if raw_review_files is None:
+        review_files = None
+    else:
+        if not isinstance(raw_review_files, list) or any(not isinstance(item, str) for item in raw_review_files):
+            raise TypeError("review_files must be a list of strings")
+        review_files = list(
+            dict.fromkeys(item.strip().replace("\\", "/") for item in raw_review_files if item.strip())
+        )
+        if not review_files:
+            raise ValueError("review_files cannot be empty")
+        unknown_files = [item for item in review_files if item not in records_by_file]
+        if unknown_files:
+            raise ValueError(f"Unknown review_file: {unknown_files[0]}")
+        for review_file in review_files:
+            resolve_review_path(review_file)
+
+    limit = payload.get("limit", 20)
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        raise TypeError("limit must be an integer")
+    if not 1 <= limit <= MAX_RETRY_QUESTIONS:
+        raise ValueError(f"limit must be between 1 and {MAX_RETRY_QUESTIONS}")
+
+    include_holdout = payload.get("include_holdout", False)
+    if not isinstance(include_holdout, bool):
+        raise TypeError("include_holdout must be a boolean")
+    if review_files and not include_holdout:
+        selected_holdouts = [item for item in review_files if records_by_file[item].get("holdout")]
+        if selected_holdouts:
+            raise ValueError("A holdout record was selected without include_holdout=true")
+
+    title = payload.get("title", "LEET 오답 재풀이")
+    if not isinstance(title, str):
+        raise TypeError("title must be a string")
+    title = title.strip()
+    if not title or len(title) > 160:
+        raise ValueError("title must contain between 1 and 160 characters")
+
+    known_tags = {
+        tag
+        for record in records
+        for tag in [record["provisional_tags"]["primary"]]
+        + list(record["provisional_tags"].get("secondary") or [])
+    }
+    tags = _validate_string_list(payload, "tags", known_tags)
+    sections = _validate_string_list(
+        payload,
+        "sections",
+        {str(record["section"]) for record in records if record.get("section")},
+    )
+    raw_years = payload.get("years")
+    years: list[int] | None
+    if raw_years is None:
+        years = None
+    else:
+        if not isinstance(raw_years, list) or any(isinstance(item, bool) or not isinstance(item, int) for item in raw_years):
+            raise TypeError("years must be a list of integers")
+        years = list(dict.fromkeys(raw_years)) or None
+        allowed_years = {int(record["year"]) for record in records if record.get("year") is not None}
+        unknown_years = sorted(set(years or []) - allowed_years)
+        if unknown_years:
+            raise ValueError(f"Unknown years: {', '.join(map(str, unknown_years))}")
+
+    return {
+        "review_files": review_files,
+        "limit": limit,
+        "tags": tags,
+        "years": years,
+        "sections": sections,
+        "include_holdout": include_holdout,
+        "title": title,
+    }
+
+
+def resolve_output_file(value: str | Path, *, must_exist: bool) -> Path:
+    if not value:
+        raise ValueError("Missing output file")
+    supplied = Path(value)
+    path = supplied.resolve() if supplied.is_absolute() else (dashboard.ROOT / supplied).resolve()
+    if not path.is_relative_to(OUTPUT_ROOT):
+        raise ValueError("Download must be under the repository output directory")
+    if path.suffix.lower() not in {".pdf", ".json"}:
+        raise ValueError("Only generated PDF and JSON files can be downloaded")
+    if must_exist and not path.is_file():
+        raise FileNotFoundError(str(value))
+    return path
+
+
+def _json_safe(value: Any) -> Any:
+    if dataclasses.is_dataclass(value):
+        return _json_safe(dataclasses.asdict(value))
+    if isinstance(value, Path):
+        return value.as_posix()
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _output_reference(path_value: str | Path) -> tuple[str, str]:
+    path = resolve_output_file(path_value, must_exist=True)
+    relative = path.relative_to(dashboard.ROOT).as_posix()
+    return relative, f"/download?file={quote(relative)}"
+
+
+def next_retry_output_path() -> Path:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    return OUTPUT_ROOT / "pdf" / "retry-pdfs" / f"retry-{stamp}.pdf"
+
+
+def create_retry_pdf_response(payload: object) -> dict[str, Any]:
+    options = validate_retry_pdf_payload(payload)
+    create_retry_pdf_bundle, _ = _load_retry_pdf_api()
+    bundle = create_retry_pdf_bundle(
+        data_root=dashboard.ROOT / "data",
+        review_files=options["review_files"],
+        limit=options["limit"],
+        tags=options["tags"],
+        years=options["years"],
+        sections=options["sections"],
+        include_holdout=options["include_holdout"],
+        title=options["title"],
+        output_path=next_retry_output_path(),
+        font_path=None,
+    )
+    pdf_path, pdf_url = _output_reference(bundle.pdf_path)
+    manifest_path, manifest_url = _output_reference(bundle.manifest_path)
+    selected = _json_safe(bundle.selected)
+    skipped = _json_safe(bundle.skipped)
+    return {
+        "pdf_path": pdf_path,
+        "pdf_url": pdf_url,
+        "manifest_path": manifest_path,
+        "manifest_url": manifest_url,
+        "selected": selected,
+        "selected_count": len(selected),
+        "skipped": skipped,
+        "skipped_count": len(skipped),
+    }
 
 
 def resolve_review_path(review_file: str) -> Path:

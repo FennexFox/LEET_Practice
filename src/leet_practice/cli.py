@@ -12,6 +12,7 @@ from rich.console import Console
 from leet_practice import __version__
 from leet_practice import attempt_review as attempt_review_workflow
 from leet_practice import ocr_crops
+from leet_practice import retry_pdf as retry_pdf_workflow
 from leet_practice.ocr_benchmark import benchmark_record, write_benchmark_summary
 from leet_practice.verification import (
     VerificationError,
@@ -102,6 +103,46 @@ def scaffold_info() -> None:
     console.print("- data/canonical/: verified local exam data")
     console.print("- data/attempts/: personal attempt records")
     console.print("- data/reviews/: wrong-answer reviews")
+
+
+@app.command("retry-pdf")
+def retry_pdf_command(
+    limit: int = typer.Option(20, "--limit", min=1, help="Maximum number of automatically selected questions."),
+    tag: list[str] = typer.Option([], "--tag", help="Primary tag to include. Repeat for multiple tags."),
+    year: list[int] = typer.Option([], "--year", help="Exam year to include. Repeat for multiple years."),
+    section: list[str] = typer.Option([], "--section", help="Exam section to include. Repeat for multiple sections."),
+    include_holdout: bool = typer.Option(False, "--include-holdout", help="Allow holdout questions to be selected."),
+    review_file: list[Path] = typer.Option(
+        [],
+        "--review-file",
+        help="Select a review record explicitly. Repeat to preserve a manual question order.",
+    ),
+    title: str = typer.Option("LEET 오답 재풀이", "--title", help="Title printed on the retry workbook."),
+    output: Path | None = typer.Option(None, "--output", help="Output PDF path."),
+    font: Path | None = typer.Option(None, "--font", help="Korean TrueType/OpenType font path."),
+    data_root: Path = typer.Option(DEFAULT_DATA_ROOT, "--data-root", help="Local data root."),
+) -> None:
+    """Create a printable wrong-answer retry workbook and answer appendix."""
+
+    try:
+        bundle = retry_pdf_workflow.create_retry_pdf_bundle(
+            data_root=data_root,
+            review_files=review_file,
+            limit=limit,
+            tags=tag,
+            years=year,
+            sections=section,
+            include_holdout=include_holdout,
+            title=title,
+            output_path=output,
+            font_path=font,
+        )
+    except retry_pdf_workflow.RetryPdfError as exc:
+        console.print(f"[red]Retry PDF generation failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    console.print(f"PDF: {bundle.pdf_path}")
+    console.print(f"Manifest: {bundle.manifest_path}")
 
 
 def _run_attempt_review_create(

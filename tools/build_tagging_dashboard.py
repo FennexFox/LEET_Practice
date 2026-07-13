@@ -414,7 +414,7 @@ def build_dashboard_html(
         f"<td>{h(metadata.get(row['tag_id'], {}).get('role', 'provisional-only tag'))}</td>"
         f"<td>{row['primary_count']}</td>"
         f"<td>{row['all_count']}</td>"
-        f"<td>{row['primary_percent']}%</td>"
+        f"<td><div class=\"frequency-cell\"><div class=\"frequency-track\" aria-hidden=\"true\"><span style=\"width: {min(float(row['primary_percent']) * 4, 100)}%\"></span></div><strong>{row['primary_percent']}%</strong></div></td>"
         "</tr>"
         for row in tag_frequency
     )
@@ -428,8 +428,8 @@ def build_dashboard_html(
             <div><dt>Primary</dt><dd>{next((row['primary_count'] for row in tag_frequency if row['tag_id'] == tag_id), 0)}</dd></div>
             <div><dt>Primary + secondary</dt><dd>{next((row['all_count'] for row in tag_frequency if row['tag_id'] == tag_id), 0)}</dd></div>
           </dl>
-          <p class="rule">{h(metadata[tag_id].get('correction_rule'))}</p>
-          <ul class="tag-card-cases">{''.join(f'<li>{render_review_file_link(case)}</li>' for case in final_card_cases[tag_id])}</ul>
+          <p class="rule"><strong>Correction cue</strong>{h(metadata[tag_id].get('correction_rule'))}</p>
+          <details class="case-list"><summary>Browse {len(final_card_cases[tag_id])} linked cases</summary><ul class="tag-card-cases">{''.join(f'<li>{render_review_file_link(case)}</li>' for case in final_card_cases[tag_id])}</ul></details>
         </article>
         """
         for tag_id in FINAL_V1_TAGS
@@ -492,12 +492,18 @@ def build_dashboard_html(
 </head>
 <body>
   <header class="app-header">
-    <h1>LEET Tagging Dashboard</h1>
-    <nav>{''.join(f'<a href="#{section_id}">{h(NAV_LABELS[section_id])}</a>' for section_id in SECTION_IDS)}</nav>
+    <div class="header-inner">
+      <div class="brand-block"><span class="brand-mark">LP</span><div><p>LEET Practice / Analysis workspace</p><h1>Tagging Dashboard</h1></div></div>
+      <a class="header-action" href="#review-queue"><span>{stats['needs_review_non_holdout']}</span> item ready for review</a>
+    </div>
+    <nav aria-label="Dashboard sections">{''.join(f'<a href="#{section_id}">{h(NAV_LABELS[section_id])}</a>' for section_id in SECTION_IDS)}</nav>
   </header>
   <main>
     <section id="overview">
-      <h2>Overview</h2>
+      <div class="overview-intro">
+        <div><p class="eyebrow">Dataset health</p><h2>Turn review evidence into reliable error patterns.</h2><p class="section-copy">Track the active corpus, focus the review queue, and compare mechanism frequency without losing the source evidence behind each tag.</p></div>
+        <div class="priority-card"><span>Next action</span><strong>{stats['needs_review_non_holdout']} active record needs review</strong><a href="#review-queue">Open review queue <span aria-hidden="true">→</span></a></div>
+      </div>
       <div class="metrics">
         {render_card("Total wrong-answer records", stats["total_records"])}
         {render_card("Active records used for tag analysis", stats["active_records"])}
@@ -510,13 +516,12 @@ def build_dashboard_html(
     </section>
 
     <section id="tag-frequency">
-      <h2>Active Tag Frequency</h2>
-      <p>Computed only from records where <code>use_for_tag_frequency</code> is true.</p>
-      <div class="table-scroll"><table><thead><tr><th>Tag</th><th>Role</th><th>Primary</th><th>Primary + secondary</th><th>% active primary</th></tr></thead><tbody>{frequency_rows}</tbody></table></div>
+      <div class="section-heading"><div><p class="eyebrow">Pattern distribution</p><h2>Active Tag Frequency</h2></div><p>Based on <strong>{stats['active_records']}</strong> active records. Bars use a 25% comparison scale.</p></div>
+      <div class="table-scroll"><table><caption class="sr-only">Active tag frequency across records used for analysis</caption><thead><tr><th scope="col">Tag</th><th scope="col">Role</th><th scope="col">Primary</th><th scope="col">Primary + secondary</th><th scope="col">% active primary</th></tr></thead><tbody>{frequency_rows}</tbody></table></div>
     </section>
 
     <section id="final-tags">
-      <h2>Final v1 Tags</h2>
+      <div class="section-heading"><div><p class="eyebrow">Mechanism library</p><h2>Final v1 Tags</h2></div><p>Definitions stay visible; linked evidence is disclosed on demand.</p></div>
       <div class="tag-grid">{final_cards}</div>
     </section>
 
@@ -527,24 +532,48 @@ def build_dashboard_html(
 
     <section id="year-section-breakdown">
       <h2>Year × Section Breakdown</h2>
-      <div class="table-scroll"><table><thead><tr><th>Year</th><th>Section</th><th>Active records</th><th>Most frequent primary tags</th></tr></thead><tbody>{breakdown_rows}</tbody></table></div>
+      <div class="table-scroll"><table><caption class="sr-only">Active records and frequent tags by year and section</caption><thead><tr><th scope="col">Year</th><th scope="col">Section</th><th scope="col">Active records</th><th scope="col">Most frequent primary tags</th></tr></thead><tbody>{breakdown_rows}</tbody></table></div>
     </section>
 
     <section id="records-table">
-      <h2>Records Table</h2>
+      <div class="section-heading"><div><p class="eyebrow">Evidence explorer</p><h2>Records Table</h2></div><p>Combine filters to isolate the next useful review set.</p></div>
       <div class="filters">
-        <input id="searchInput" type="search" placeholder="Search records">
-        <select id="tagFilter"><option value="">All tags</option>{''.join(f'<option>{h(tag)}</option>' for tag in all_tags)}</select>
-        <select id="yearFilter"><option value="">All years</option>{''.join(f'<option>{h(year)}</option>' for year in years)}</select>
-        <select id="sectionFilter"><option value="">All sections</option>{''.join(f'<option>{h(section)}</option>' for section in sections)}</select>
-        <select id="confidenceFilter"><option value="">All confidence</option>{''.join(f'<option>{h(conf)}</option>' for conf in confidences)}</select>
+        <label class="filter-field filter-search"><span>Search</span><input id="searchInput" type="search" placeholder="Question, tag, or rationale"></label>
+        <label class="filter-field"><span>Tag</span><select id="tagFilter"><option value="">All tags</option>{''.join(f'<option>{h(tag)}</option>' for tag in all_tags)}</select></label>
+        <label class="filter-field"><span>Year</span><select id="yearFilter"><option value="">All years</option>{''.join(f'<option>{h(year)}</option>' for year in years)}</select></label>
+        <label class="filter-field"><span>Section</span><select id="sectionFilter"><option value="">All sections</option>{''.join(f'<option>{h(section)}</option>' for section in sections)}</select></label>
+        <label class="filter-field"><span>Confidence</span><select id="confidenceFilter"><option value="">All levels</option>{''.join(f'<option>{h(conf)}</option>' for conf in confidences)}</select></label>
+        <div class="filter-toggles">
         <label><input id="hideHoldouts" type="checkbox"> Hide holdouts</label>
         <label><input id="needsOnly" type="checkbox"> Needs-review only</label>
+        </div>
+        <button id="resetFilters" type="button">Reset</button>
+      </div>
+      <div class="retry-builder" aria-labelledby="retryBuilderTitle">
+        <div class="retry-builder-copy">
+          <p class="eyebrow">Focused practice</p>
+          <h3 id="retryBuilderTitle">Build a retry PDF</h3>
+          <p>Recommend a balanced set from the currently filtered mistakes, then adjust it with the row checkboxes.</p>
+        </div>
+        <label class="retry-field"><span>Title</span><input id="retryTitle" type="text" maxlength="160" value="LEET 오답 재풀이"></label>
+        <label class="retry-field retry-limit"><span>Recommendation size</span><input id="retryLimit" type="number" min="1" max="100" value="20"></label>
+        <label class="retry-check"><input id="includeHoldouts" type="checkbox"> Include holdouts</label>
+        <div class="retry-actions">
+          <button id="recommendSelection" class="primary-action" type="button">추천 선택</button>
+          <button id="selectVisible" type="button">Select all shown</button>
+          <button id="clearSelection" type="button">Clear</button>
+        </div>
+        <div class="retry-generate">
+          <strong id="selectedCount" aria-live="polite">0 selected</strong>
+          <button id="generateRetryPdf" class="primary-action" type="button" disabled>Generate retry PDF</button>
+        </div>
+        <div id="retryStatus" class="retry-status" aria-live="polite"></div>
       </div>
       <div class="table-note"><span id="recordCount"></span><span class="scroll-hint"> Scroll sideways for tags and rationale.</span></div>
       <div class="table-scroll records-scroll">
         <table id="recordsTable">
-          <thead><tr><th>Year</th><th>Section</th><th>Q</th><th>Review file</th><th>Selected</th><th>Correct</th><th>Primary tag</th><th>Secondary</th><th>Confidence</th><th>Needs review</th><th>Holdout</th><th>Use frequency</th><th>Use promotion</th><th>Rationale</th></tr></thead>
+          <caption class="sr-only">Filterable tagging evidence records</caption>
+          <thead><tr><th scope="col"><span class="sr-only">PDF selection</span></th><th scope="col">Year</th><th scope="col">Section</th><th scope="col">Q</th><th scope="col">Review file</th><th scope="col">Selected</th><th scope="col">Correct</th><th scope="col">Primary tag</th><th scope="col">Secondary</th><th scope="col">Confidence</th><th scope="col">Needs review</th><th scope="col">Holdout</th><th scope="col">Use frequency</th><th scope="col">Use promotion</th><th scope="col">Rationale</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -562,7 +591,7 @@ def build_dashboard_html(
 
     <section id="audit">
       <h2>Data Integrity / Audit</h2>
-      <div class="table-scroll"><table><tbody>{audit_rows}</tbody></table></div>
+      <div class="table-scroll"><table><caption class="sr-only">Data integrity audit checks and results</caption><tbody>{audit_rows}</tbody></table></div>
     </section>
   </main>
   <script id="dashboard-data" type="application/json">{html.escape(json.dumps(dashboard_data, ensure_ascii=False), quote=False)}</script>
@@ -621,97 +650,178 @@ def render_case_details(record: dict[str, Any]) -> str:
 
 CSS = """
 :root {
-  --bg: #f7f7f5;
+  --bg: #f4f6fb;
   --panel: #ffffff;
-  --text: #242424;
-  --muted: #666;
-  --line: #d9d9d4;
-  --accent: #0f766e;
-  --accent-2: #7c3aed;
+  --text: #172033;
+  --muted: #667085;
+  --line: #dfe4ee;
+  --line-strong: #cbd3e1;
+  --accent: #4f46e5;
+  --accent-dark: #3730a3;
+  --accent-soft: #eef2ff;
+  --accent-2: #0891b2;
   --warn: #b45309;
   --danger: #b91c1c;
+  --shadow: 0 10px 28px rgba(25, 37, 65, 0.07);
   --mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 * { box-sizing: border-box; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 body { margin: 0; background: var(--bg); color: var(--text); }
-.app-header { position: sticky; top: 0; z-index: 2; background: #ffffffee; border-bottom: 1px solid var(--line); padding: 14px 24px; backdrop-filter: blur(8px); }
-.app-header h1 { margin: 0 0 10px; font-size: 24px; letter-spacing: 0; }
-nav { display: flex; flex-wrap: wrap; gap: 8px; }
-nav a { color: var(--accent); text-decoration: none; font-size: 13px; border: 1px solid var(--line); padding: 5px 8px; border-radius: 6px; background: #fff; }
+.app-header { position: sticky; top: 0; z-index: 5; background: rgba(255,255,255,.94); border-bottom: 1px solid var(--line); padding: 15px 24px 10px; backdrop-filter: blur(14px); box-shadow: 0 4px 18px rgba(25,37,65,.04); }
+.header-inner { max-width: 1420px; margin: 0 auto 12px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.brand-block { display: flex; align-items: center; gap: 11px; }
+.brand-mark { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 11px; color: #fff; background: linear-gradient(145deg, var(--accent), var(--accent-2)); font-size: 13px; font-weight: 800; letter-spacing: .04em; box-shadow: 0 8px 18px rgba(79,70,229,.24); }
+.brand-block p { margin: 0 0 2px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.app-header h1 { margin: 0; font-size: 21px; letter-spacing: -.02em; }
+.header-action { display: inline-flex; align-items: center; gap: 8px; color: var(--accent-dark); text-decoration: none; font-size: 13px; font-weight: 700; background: var(--accent-soft); border: 1px solid #c7d2fe; border-radius: 999px; padding: 7px 12px 7px 8px; }
+.header-action > span { display: grid; place-items: center; width: 22px; height: 22px; color: #fff; background: var(--accent); border-radius: 50%; }
+nav { max-width: 1420px; margin: 0 auto; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin; }
+nav a { flex: 0 0 auto; color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 650; padding: 6px 9px; border-radius: 7px; }
+nav a:hover, nav a:focus-visible { color: var(--accent-dark); background: var(--accent-soft); outline: none; }
 a { color: var(--accent); }
 .review-link { font-family: var(--mono); overflow-wrap: anywhere; }
-main { max-width: 1500px; margin: 0 auto; padding: 20px 24px 48px; }
-section { margin: 0 0 26px; scroll-margin-top: 110px; }
-h2 { font-size: 20px; margin: 0 0 12px; }
+main { max-width: 1470px; margin: 0 auto; padding: 34px 24px 64px; }
+section { margin: 0 0 42px; scroll-margin-top: 132px; }
+h2 { font-size: 21px; margin: 0; letter-spacing: -.02em; }
 h3 { font-size: 15px; margin: 0 0 10px; }
 p { line-height: 1.45; }
-code { font-family: var(--mono); background: #efefeb; padding: 1px 4px; border-radius: 4px; }
-.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
-.metric, .tag-card, .queue-block { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
-.metric span { display: block; min-height: 34px; color: var(--muted); font-size: 12px; line-height: 1.35; }
-.metric strong { display: block; font-size: 28px; margin-top: 4px; }
+code { font-family: var(--mono); background: #eef1f6; padding: 1px 4px; border-radius: 4px; }
+.eyebrow { margin: 0 0 7px; color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.overview-intro { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 360px); gap: 22px; align-items: end; margin-bottom: 18px; }
+.overview-intro h2 { max-width: 760px; font-size: clamp(28px, 3.5vw, 44px); line-height: 1.06; letter-spacing: -.045em; }
+.section-copy { max-width: 760px; margin: 14px 0 0; color: var(--muted); font-size: 15px; }
+.priority-card { display: grid; gap: 7px; padding: 18px; color: #fff; border-radius: 16px; background: linear-gradient(135deg, #312e81, #4f46e5 60%, #0e7490); box-shadow: 0 16px 32px rgba(49,46,129,.2); }
+.priority-card > span { color: #c7d2fe; font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.priority-card strong { font-size: 18px; line-height: 1.3; }
+.priority-card a { color: #fff; font-size: 13px; font-weight: 750; text-decoration: none; }
+.section-heading { display: flex; align-items: end; justify-content: space-between; gap: 22px; margin-bottom: 14px; }
+.section-heading > p { max-width: 480px; margin: 0; color: var(--muted); font-size: 13px; text-align: right; }
+.metrics { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; }
+.metric, .tag-card, .queue-block { background: var(--panel); border: 1px solid var(--line); border-radius: 13px; padding: 15px; box-shadow: var(--shadow); }
+.metric { min-height: 112px; position: relative; overflow: hidden; }
+.metric::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: linear-gradient(var(--accent), var(--accent-2)); opacity: .8; }
+.metric span { display: block; min-height: 38px; color: var(--muted); font-size: 11px; line-height: 1.35; }
+.metric strong { display: block; font-size: 29px; margin-top: 7px; letter-spacing: -.035em; }
 table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); }
-th, td { border-bottom: 1px solid var(--line); padding: 8px; text-align: left; vertical-align: top; font-size: 13px; }
-th { background: #efefeb; }
-.table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+th, td { border-bottom: 1px solid var(--line); padding: 10px 12px; text-align: left; vertical-align: top; font-size: 12px; }
+th { position: sticky; top: 0; z-index: 1; background: #f7f8fb; color: #475467; font-size: 11px; letter-spacing: .03em; text-transform: uppercase; }
+tbody tr:hover { background: #f8f9ff; }
+.table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 13px; background: var(--panel); box-shadow: var(--shadow); }
 .table-scroll table { border: 0; min-width: 720px; }
 .records-scroll table { min-width: 1260px; }
-.tag-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
+.frequency-cell { display: grid; grid-template-columns: minmax(90px, 1fr) 48px; align-items: center; gap: 10px; min-width: 180px; }
+.frequency-track { height: 7px; overflow: hidden; background: #e8ecf4; border-radius: 999px; }
+.frequency-track span { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: inherit; }
+.frequency-cell strong { text-align: right; font-size: 12px; }
+.tag-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 14px; }
 .tag-card header { display: grid; gap: 6px; min-height: 48px; margin-bottom: 8px; }
 .tag-card header span:not(.tag-badge) { font-weight: 700; line-height: 1.25; }
 .tag-card p { margin: 8px 0; }
-.tag-definition { min-height: 104px; }
+.tag-definition { min-height: 94px; color: #344054; }
 .tag-card dl { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0; }
-.tag-card dl div { background: #f4f4f1; border-radius: 6px; padding: 8px; }
+.tag-card dl div { background: #f7f8fb; border: 1px solid #edf0f5; border-radius: 9px; padding: 9px; }
 .tag-card dt { color: var(--muted); font-size: 12px; }
 .tag-card dd { margin: 2px 0 0; font-weight: 700; }
 .tag-card ul { margin: 8px 0 0; padding-left: 18px; }
-.tag-card-cases { max-height: 116px; overflow-y: auto; padding-right: 6px; }
+.tag-card-cases { max-height: 168px; overflow-y: auto; padding-right: 6px; }
 .tag-card-cases li { margin-bottom: 5px; }
-.rule { color: #3f3f3f; font-size: 13px; }
+.rule { display: grid; gap: 4px; min-height: 74px; color: #344054; font-size: 13px; padding: 10px; background: var(--accent-soft); border-radius: 9px; }
+.rule strong { color: var(--accent-dark); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.case-list { margin-top: 11px; padding: 0; border: 0; background: transparent; }
+.case-list summary { color: var(--accent-dark); font-size: 12px; }
 .note { color: var(--warn); font-weight: 600; }
-.tag-badge { display: inline-block; font-family: var(--mono); font-size: 12px; border-radius: 999px; padding: 3px 7px; border: 1px solid var(--line); background: #f4f4f1; }
-.tag-badge.final { background: #e7f6f3; border-color: #9bd3cb; color: #064e45; }
+.tag-badge { display: inline-block; width: fit-content; font-family: var(--mono); font-size: 11px; border-radius: 999px; padding: 4px 8px; border: 1px solid var(--line); background: #f4f5f8; }
+.tag-badge.final { background: #ecfeff; border-color: #a5f3fc; color: #155e75; }
 .tag-badge.supporting { background: #f0eafb; border-color: #c4b5fd; color: #4c1d95; }
 .tag-badge.status { background: #fff7ed; border-color: #fdba74; color: #9a3412; }
-.filters { display: grid; grid-template-columns: minmax(220px, 1fr) repeat(4, minmax(120px, 180px)) auto auto; gap: 8px; align-items: center; margin-bottom: 10px; }
-.filters input, .filters select { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 7px; background: #fff; }
-.filters label { display: flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; }
-.filters label input { width: auto; }
+.filters { display: grid; grid-template-columns: minmax(220px, 1.35fr) repeat(4, minmax(115px, .72fr)) auto auto; gap: 10px; align-items: end; padding: 14px; margin-bottom: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 13px; box-shadow: var(--shadow); }
+.filter-field { display: grid !important; gap: 5px !important; }
+.filter-field > span { color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: .07em; text-transform: uppercase; }
+.filters input, .filters select { width: 100%; height: 38px; border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 9px; background: #fff; color: var(--text); }
+.filters input:focus, .filters select:focus { border-color: var(--accent); outline: 3px solid rgba(79,70,229,.11); }
+.filters label { display: flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
+.filters label input { width: auto; height: auto; accent-color: var(--accent); }
+.filter-toggles { display: grid; gap: 7px; padding-bottom: 2px; }
+.filters button { height: 38px; border: 1px solid var(--line-strong); border-radius: 8px; padding: 0 13px; color: #344054; background: #fff; font-weight: 700; cursor: pointer; }
+.filters button:hover { border-color: var(--accent); color: var(--accent-dark); }
+.retry-builder { display: grid; grid-template-columns: minmax(220px, 1.25fr) minmax(230px, 1fr) 150px auto; gap: 14px; align-items: end; margin: 12px 0; padding: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 13px; box-shadow: var(--shadow); }
+.retry-builder-copy { align-self: center; }
+.retry-builder-copy h3 { margin: 0; font-size: 17px; }
+.retry-builder-copy p:last-child { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+.retry-field { display: grid; gap: 5px; }
+.retry-field > span { color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: .07em; text-transform: uppercase; }
+.retry-field input { width: 100%; height: 38px; border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 9px; color: var(--text); background: #fff; }
+.retry-field input:focus { border-color: var(--accent); outline: 3px solid rgba(79,70,229,.11); }
+.retry-check { display: flex; align-items: center; gap: 7px; min-height: 38px; font-size: 12px; }
+.retry-check input, .row-selector { accent-color: var(--accent); }
+.retry-actions { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.retry-actions button, .retry-generate button { min-height: 38px; border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 12px; color: #344054; background: #fff; font-weight: 700; cursor: pointer; }
+.retry-actions button:hover, .retry-generate button:hover { border-color: var(--accent); color: var(--accent-dark); }
+.retry-actions .primary-action, .retry-generate .primary-action { color: #fff; border-color: var(--accent); background: var(--accent); }
+.retry-actions .primary-action:hover, .retry-generate .primary-action:hover { color: #fff; border-color: var(--accent-dark); background: var(--accent-dark); }
+.retry-generate { grid-column: 1 / -1; display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.retry-generate strong { color: var(--accent-dark); font-size: 13px; }
+.retry-generate button:disabled { cursor: not-allowed; opacity: .5; }
+.retry-status { grid-column: 1 / -1; min-height: 0; color: var(--muted); font-size: 12px; text-align: right; }
+.retry-status:empty { display: none; }
+.retry-status.error { color: var(--danger); }
+.retry-status.success { color: #047857; }
+.retry-status a { font-weight: 750; }
+.row-selector { width: 16px; height: 16px; cursor: pointer; }
+.selected-row { background: var(--accent-soft); }
 .table-note { color: var(--muted); margin: 8px 0; }
 .scroll-hint { display: none; }
-#recordsTable td:nth-child(4) { max-width: 220px; overflow-wrap: anywhere; }
-#recordsTable td:nth-child(7), #recordsTable td:nth-child(8) { font-family: var(--mono); font-size: 12px; }
-#recordsTable td:nth-child(14) { width: 280px; max-width: 280px; }
+#recordsTable td:nth-child(5) { max-width: 220px; overflow-wrap: anywhere; }
+#recordsTable td:nth-child(8), #recordsTable td:nth-child(9) { font-family: var(--mono); font-size: 12px; }
+#recordsTable td:nth-child(15) { width: 280px; max-width: 280px; }
 .rationale-summary { cursor: pointer; color: var(--accent); font-weight: 600; }
 .rationale-details[open] .rationale-summary { margin-bottom: 6px; }
 .rationale-text { color: var(--text); line-height: 1.38; max-height: 170px; overflow: auto; padding-right: 4px; }
+.empty-row td { padding: 34px 18px; color: var(--muted); text-align: center; font-size: 13px; }
 .queue-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
-.queue-block h3 { display: flex; justify-content: space-between; }
+.queue-block h3 { display: flex; justify-content: space-between; color: #344054; }
+.queue-block h3 span { display: grid; place-items: center; min-width: 24px; height: 24px; padding: 0 7px; color: var(--accent-dark); background: var(--accent-soft); border-radius: 999px; }
 .queue-block ul { margin: 0; padding-left: 18px; }
 .queue-block li { margin: 0 0 8px; font-size: 13px; }
 .queue-block em { display: block; color: var(--muted); font-style: normal; font-family: var(--mono); }
 .rep-group { margin-bottom: 18px; }
-details { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 8px 0; }
+details { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 11px 13px; margin: 8px 0; }
 summary { cursor: pointer; font-weight: 600; }
+@media (max-width: 1180px) {
+  .metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .filters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .filter-search { grid-column: span 2; }
+  .retry-builder { grid-template-columns: 1fr 1fr; }
+  .retry-actions { grid-column: 1 / -1; }
+}
 @media (max-width: 900px) {
+  .overview-intro { grid-template-columns: 1fr; align-items: stretch; }
+  .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .section-heading { align-items: start; flex-direction: column; gap: 5px; }
+  .section-heading > p { text-align: left; }
   .filters { grid-template-columns: 1fr 1fr; }
+  .filter-search { grid-column: span 2; }
 }
 @media (max-width: 700px) {
   .app-header { padding: 14px 16px 12px; }
-  .app-header h1 { font-size: 23px; }
-  nav { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
-  nav a { flex: 0 0 auto; }
-  main { padding: 20px 16px 40px; }
-  section { scroll-margin-top: 96px; }
+  .app-header h1 { font-size: 19px; }
+  .brand-block p, .header-action { display: none; }
+  nav { padding-bottom: 2px; }
+  main { padding: 26px 16px 44px; }
+  section { margin-bottom: 34px; scroll-margin-top: 108px; }
+  .overview-intro h2 { font-size: 31px; }
   .metrics { grid-template-columns: 1fr 1fr; gap: 8px; }
   .metric { min-height: 92px; padding: 12px; }
   .metric span { min-height: 32px; font-size: 11px; }
   .metric strong { font-size: 26px; }
   .tag-grid, .queue-grid { grid-template-columns: 1fr; }
   .filters { grid-template-columns: 1fr; }
+  .filter-search { grid-column: auto; }
   .filters label { justify-content: flex-start; white-space: normal; }
+  .retry-builder { grid-template-columns: 1fr; }
+  .retry-actions, .retry-generate, .retry-status { grid-column: auto; justify-content: flex-start; text-align: left; }
   .scroll-hint { display: inline; }
 }
 """
@@ -723,6 +833,8 @@ const tbody = document.querySelector('#recordsTable tbody');
 const recordCount = document.getElementById('recordCount');
 const controls = ['searchInput','tagFilter','yearFilter','sectionFilter','confidenceFilter','hideHoldouts','needsOnly']
   .map(id => document.getElementById(id));
+const selectedFiles = new Set();
+const confidenceOrder = {high: 0, medium: 1, low: 2};
 
 function cell(value) {
   const td = document.createElement('td');
@@ -752,6 +864,24 @@ function rationaleCell(value) {
   text.textContent = value == null ? '' : String(value);
   details.append(summary, text);
   td.appendChild(details);
+  return td;
+}
+
+function selectorCell(record) {
+  const td = document.createElement('td');
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.className = 'row-selector';
+  input.checked = selectedFiles.has(record.review_file);
+  input.disabled = !isRetryEligible(record);
+  if (input.disabled) input.title = 'Enable Include holdouts to select this record.';
+  input.setAttribute('aria-label', `Select ${reviewLabel(record)} for retry PDF`);
+  input.addEventListener('change', () => {
+    if (input.checked) selectedFiles.add(record.review_file);
+    else selectedFiles.delete(record.review_file);
+    updateSelectionUi();
+  });
+  td.appendChild(input);
   return td;
 }
 
@@ -786,11 +916,78 @@ function matches(record) {
   return true;
 }
 
+function filteredRecords() {
+  return data.records.filter(matches);
+}
+
+function isRetryEligible(record) {
+  return Boolean(record.use_for_tag_frequency) ||
+    (document.getElementById('includeHoldouts').checked && Boolean(record.holdout));
+}
+
+function retryLimit() {
+  const field = document.getElementById('retryLimit');
+  const parsed = Number.parseInt(field.value, 10);
+  const value = Number.isFinite(parsed) ? Math.min(100, Math.max(1, parsed)) : 20;
+  field.value = String(value);
+  return value;
+}
+
+function compareRetryRecords(left, right) {
+  const leftConfidence = confidenceOrder[left.provisional_tags.confidence] ?? 9;
+  const rightConfidence = confidenceOrder[right.provisional_tags.confidence] ?? 9;
+  if (leftConfidence !== rightConfidence) return leftConfidence - rightConfidence;
+  return [left.year, left.section, left.question_no, left.review_file]
+    .map(String).join('|').localeCompare(
+      [right.year, right.section, right.question_no, right.review_file].map(String).join('|'),
+      'ko',
+      {numeric: true}
+    );
+}
+
+function recommendRecords(records, limit) {
+  const groups = new Map();
+  for (const record of records.filter(isRetryEligible)) {
+    const tag = record.provisional_tags.primary;
+    if (!groups.has(tag)) groups.set(tag, []);
+    groups.get(tag).push(record);
+  }
+  const queues = Array.from(groups.entries())
+    .map(([tag, items]) => ({tag, total: items.length, items: items.sort(compareRetryRecords)}))
+    .sort((left, right) => right.total - left.total || left.tag.localeCompare(right.tag));
+  const recommendation = [];
+  while (recommendation.length < limit && queues.some(group => group.items.length)) {
+    for (const group of queues) {
+      if (recommendation.length >= limit) break;
+      const record = group.items.shift();
+      if (record) recommendation.push(record);
+    }
+  }
+  return recommendation;
+}
+
+function updateSelectionUi() {
+  const count = selectedFiles.size;
+  document.getElementById('selectedCount').textContent = `${count} selected`;
+  document.getElementById('generateRetryPdf').disabled = count === 0;
+  document.querySelectorAll('.row-selector').forEach(input => {
+    const row = input.closest('tr');
+    row.classList.toggle('selected-row', input.checked);
+  });
+}
+
+function setRetryStatus(message, kind = '') {
+  const status = document.getElementById('retryStatus');
+  status.className = `retry-status ${kind}`.trim();
+  status.textContent = message;
+}
+
 function renderRows() {
-  const rows = data.records.filter(matches);
+  const rows = filteredRecords();
   tbody.replaceChildren();
   for (const record of rows) {
     const tr = document.createElement('tr');
+    tr.appendChild(selectorCell(record));
     [
       record.year, record.section, record.question_no
     ].forEach(value => tr.appendChild(cell(value)));
@@ -805,10 +1002,92 @@ function renderRows() {
     tr.appendChild(rationaleCell(record.tag_rationale));
     tbody.appendChild(tr);
   }
+  if (!rows.length) {
+    const tr = document.createElement('tr');
+    tr.className = 'empty-row';
+    const td = document.createElement('td');
+    td.colSpan = 15;
+    td.textContent = 'No records match these filters. Reset or broaden the search.';
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
   recordCount.textContent = `${rows.length} of ${data.records.length} records shown`;
+  updateSelectionUi();
 }
 
 controls.forEach(control => control.addEventListener('input', renderRows));
+document.getElementById('resetFilters').addEventListener('click', () => {
+  controls.forEach(control => {
+    if (control.type === 'checkbox') control.checked = false;
+    else control.value = '';
+  });
+  renderRows();
+  document.getElementById('searchInput').focus();
+});
+document.getElementById('recommendSelection').addEventListener('click', () => {
+  const recommendation = recommendRecords(filteredRecords(), retryLimit());
+  selectedFiles.clear();
+  recommendation.forEach(record => selectedFiles.add(record.review_file));
+  renderRows();
+  setRetryStatus(
+    recommendation.length
+      ? `${recommendation.length} questions recommended across primary error tags.`
+      : 'No eligible records match the current filters.',
+    recommendation.length ? '' : 'error'
+  );
+});
+document.getElementById('selectVisible').addEventListener('click', () => {
+  filteredRecords().filter(isRetryEligible).forEach(record => selectedFiles.add(record.review_file));
+  renderRows();
+  setRetryStatus('All eligible records currently shown were selected.');
+});
+document.getElementById('clearSelection').addEventListener('click', () => {
+  selectedFiles.clear();
+  renderRows();
+  setRetryStatus('Selection cleared.');
+});
+document.getElementById('includeHoldouts').addEventListener('change', event => {
+  if (!event.target.checked) {
+    const holdoutFiles = new Set(data.records.filter(record => record.holdout).map(record => record.review_file));
+    holdoutFiles.forEach(reviewFile => selectedFiles.delete(reviewFile));
+  }
+  renderRows();
+});
+document.getElementById('generateRetryPdf').addEventListener('click', async () => {
+  if (!selectedFiles.size) return;
+  const button = document.getElementById('generateRetryPdf');
+  const title = document.getElementById('retryTitle').value.trim() || 'LEET 오답 재풀이';
+  button.disabled = true;
+  setRetryStatus('Generating PDF...');
+  try {
+    const response = await fetch('/api/retry-pdf', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        review_files: Array.from(selectedFiles),
+        limit: selectedFiles.size,
+        include_holdout: document.getElementById('includeHoldouts').checked,
+        title
+      })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || result.error || 'PDF generation failed.');
+    const status = document.getElementById('retryStatus');
+    status.className = 'retry-status success';
+    status.replaceChildren(document.createTextNode(`Created ${result.selected_count} questions. `));
+    for (const [label, href] of [['Download PDF', result.pdf_url], ['Manifest', result.manifest_url]]) {
+      if (!href) continue;
+      const link = document.createElement('a');
+      link.href = href;
+      link.textContent = label;
+      status.append(link, document.createTextNode(' '));
+    }
+  } catch (error) {
+    setRetryStatus(error.message || String(error), 'error');
+  } finally {
+    button.disabled = selectedFiles.size === 0;
+  }
+});
 renderRows();
 """
 

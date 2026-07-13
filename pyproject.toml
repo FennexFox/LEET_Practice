@@ -19,6 +19,7 @@ pdf = [
     "pymupdf>=1.24",
     "pillow>=10.0",
     "pypdf>=5.0",
+    "reportlab>=4.2",
 ]
 # PaddlePaddle runtime is installed separately because CPU/GPU builds use
 # different package names and Windows GPU wheels require a custom index.

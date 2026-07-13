@@ -115,6 +115,25 @@ For a standalone snapshot, regenerate the static HTML file:
 python tools/build_tagging_dashboard.py
 ```
 
+The live dashboard can also build a printable retry workbook. Apply the
+filters, use **추천 선택** for a balanced selection across vulnerable primary
+tags, adjust the checkboxes, and choose **Generate retry PDF**. The workbook
+keeps questions and choices in the first section and puts answers, previous
+choices, and error-tag analysis in a separate appendix.
+
+The same generator is available from the CLI:
+
+```bash
+python -m pip install -e ".[pdf]"
+leet-practice retry-pdf --limit 20
+leet-practice retry-pdf --tag CHOICE_VERIFICATION_FAILURE --year 2025
+leet-practice retry-pdf --review-file "data/reviews/<attempt>/q01.review.json"
+```
+
+PDFs and their reproducibility manifests are written together under
+`output/pdf/retry-pdfs/` by default. Use `--font` when a Korean system font
+cannot be discovered automatically.
+
 ## Design direction
 
 The project should grow in this order:
