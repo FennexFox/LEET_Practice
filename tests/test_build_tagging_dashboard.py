@@ -48,8 +48,8 @@ def test_dashboard_counts_match_tagging_jsonl():
     records = load_records()
 
     assert len(records) == 95
-    assert sum(record["use_for_tag_frequency"] is True for record in records) == 90
-    assert sum(record["holdout"] is True for record in records) == 5
+    assert sum(record["use_for_tag_frequency"] is True for record in records) == 95
+    assert sum(record["holdout"] is True for record in records) == 0
     assert (
         sum(
             record["needs_review"] is True and record["holdout"] is not True
@@ -59,16 +59,31 @@ def test_dashboard_counts_match_tagging_jsonl():
     )
 
 
-def test_holdouts_excluded_from_frequency_and_promotion():
+def test_2025_reasoning_retake_replaces_old_holdouts():
     records = load_records()
-    holdouts = [record for record in records if record["holdout"] is True]
-    expected_qnos = {"q09", "q23", "q29", "q33", "q34"}
+    retake = [
+        record
+        for record in records
+        if record["review_file"].startswith("data/reviews/2025 추리논증 홀수형/")
+    ]
 
-    assert {Path(record["review_file"]).stem.split(".")[0] for record in holdouts} == expected_qnos
-    assert all(record["review_file"].startswith("data/reviews/2025 ") for record in holdouts)
-    assert all(record["use_for_tag_frequency"] is False for record in holdouts)
-    assert all(record["use_for_final_tag_promotion"] is False for record in holdouts)
-    assert all(record["revisit_plan"] == "resolve_after_retake" for record in holdouts)
+    assert {Path(record["review_file"]).stem.split(".")[0] for record in retake} == {
+        "q10",
+        "q14",
+        "q17",
+        "q33",
+        "q34",
+    }
+    assert all(record["exam_id"] == "2025 추리논증 홀수형" for record in retake)
+    assert all(record["holdout"] is False for record in retake)
+    assert all(record["use_for_tag_frequency"] is True for record in retake)
+    assert all(record["use_for_final_tag_promotion"] is True for record in retake)
+    assert not any(
+        record["year"] == 2025
+        and record["section"] == "추리논증"
+        and "짝수형" in record["review_file"]
+        for record in records
+    )
 
 
 def test_dashboard_includes_v1_tag_sets():
@@ -139,12 +154,14 @@ def test_dashboard_frequency_after_v1_corrections():
     active = [record for record in records if record["use_for_tag_frequency"] is True]
     counts = Counter(record["provisional_tags"]["primary"] for record in active)
 
-    assert counts["SCOPE_CONDITION_MISAPPLICATION"] == 17
+    assert counts["SCOPE_CONDITION_MISAPPLICATION"] == 18
     assert counts["CONCEPT_LAYER_CONFUSION"] == 14
     assert counts["TABLE_DIAGRAM_ENCODING_ERROR"] == 10
     assert counts["RELATION_DIRECTION_REVERSAL"] == 4
     assert counts["TEXTUAL_REDEFINITION_MISSED"] == 3
-    assert counts["UNWARRANTED_ASSUMPTION_ADDED"] == 5
+    assert counts["FORMAL_CONDITION_ERROR"] == 10
+    assert counts["GLOBAL_CONSTRAINT_DROPPED"] == 10
+    assert counts["UNWARRANTED_ASSUMPTION_ADDED"] == 6
     assert "INSUFFICIENT_REVIEW_BASIS" not in counts
 
 
@@ -306,14 +323,19 @@ def test_retry_pdf_payload_validates_allowlisted_review_files():
         serve_tagging_dashboard.validate_retry_pdf_payload({"output_path": "../escape.pdf"})
 
 
-def test_retry_pdf_payload_requires_explicit_holdout_opt_in():
+def test_retry_pdf_payload_requires_explicit_holdout_opt_in(monkeypatch):
     if str(TOOLS_DIR) not in sys.path:
         sys.path.insert(0, str(TOOLS_DIR))
 
     import pytest
     import serve_tagging_dashboard
 
-    holdout = next(record for record in load_records() if record["holdout"])
+    holdout = dict(load_records()[0])
+    holdout["review_file"] = "data/reviews/synthetic-holdout/q01.review.json"
+    holdout["holdout"] = True
+    holdout["use_for_tag_frequency"] = False
+    holdout["use_for_final_tag_promotion"] = False
+    monkeypatch.setattr(serve_tagging_dashboard.dashboard, "load_records", lambda: [holdout])
     with pytest.raises(ValueError, match="include_holdout=true"):
         serve_tagging_dashboard.validate_retry_pdf_payload(
             {"review_files": [holdout["review_file"]], "include_holdout": False}

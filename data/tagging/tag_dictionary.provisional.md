@@ -19,7 +19,7 @@ These tags are provisional mechanism labels for review and later promotion. They
 - Positive criteria: 답 후보를 잡은 뒤 선택지의 정확한 문구, 예외, 선택 번호, 도출 결론과의 대응을 확인하지 않은 경우 사용한다.
 - Negative criteria: 검산 이전에 명확한 조건식이나 개념 구분을 잘못 세운 경우 해당 기제 태그를 우선한다.
 - Neighboring tags: TIME_PRESSURE_OR_ATTENTION_LAPSE는 운영 상태가 1차 원인일 때만 primary로 둔다.
-- Representative review files: data/reviews/2020 언어이해 홀수형/q03.review.json, data/reviews/2020 언어이해 홀수형/q12.review.json, data/reviews/2021 언어이해 홀수형/q01.review.json, data/reviews/2025 언어이해 짝수형/q06.review.json
+- Representative review files: data/reviews/2021 언어이해 홀수형/q01.review.json, data/reviews/2025 언어이해 짝수형/q14.review.json, data/reviews/2025 언어이해 짝수형/q20.review.json, data/reviews/2025 언어이해 짝수형/q21.review.json
 - Suggested correction rule: 최종 표시 전 선택지의 주어·술어·제한어를 지문 근거 하나와 대응시킨다.
 
 ## `CONCEPT_LAYER_CONFUSION`
@@ -29,7 +29,7 @@ These tags are provisional mechanism labels for review and later promotion. They
 - Positive criteria: 좋은 결과와 관점의 정당화 방식, 현상 발생과 특정 원인, 상상력과 개념적 사유처럼 층위 전환이 핵심일 때 사용한다.
 - Negative criteria: 층위보다 단순 귀속 대상이 문제이면 ROLE_ATTRIBUTION_ERROR를 우선한다.
 - Neighboring tags: ARGUMENT_STRUCTURE_INCOMPLETE는 논증 단계 누락, CONCEPT_LAYER_CONFUSION은 판단 기준의 층위 혼동에 초점을 둔다.
-- Representative review files: data/reviews/2020 언어이해 홀수형/q05.review.json, data/reviews/2021 언어이해 홀수형/q14.review.json, data/reviews/2021 언어이해 홀수형/q30.review.json, data/reviews/2022 추리논증 짝수형/q18.review.json
+- Representative review files: data/reviews/2019 추리논증 홀수형/q22.review.json, data/reviews/2020 언어이해 홀수형/q05.review.json, data/reviews/2020 언어이해 홀수형/q12.review.json, data/reviews/2021 언어이해 홀수형/q14.review.json
 - Suggested correction rule: 선지의 핵심어가 지문에서 같은 층위의 말인지, 더 높은/낮은 층위의 말인지 표시한다.
 
 ## `FORMAL_CONDITION_ERROR`
@@ -59,7 +59,7 @@ These tags are provisional mechanism labels for review and later promotion. They
 - Positive criteria: unreviewed 상태이거나 self-review와 assistant feedback이 모두 없어 오답 메커니즘을 재구성할 수 없을 때 사용한다.
 - Negative criteria: 리뷰 근거가 조금이라도 있어 낮은 확신의 기제 진단이 가능한 경우에는 해당 기제 태그와 low confidence를 사용한다.
 - Neighboring tags: needs_review=true와 함께 사용하며, final_error_tags로 승격하지 않는 임시 품질 태그다.
-- Representative review files: data/reviews/2025 추리논증 짝수형/q09.review.json (holdout), data/reviews/2025 추리논증 짝수형/q23.review.json (holdout), data/reviews/2025 추리논증 짝수형/q29.review.json (holdout), data/reviews/2025 추리논증 짝수형/q33.review.json (holdout)
+- Representative review files: none in this corpus
 - Suggested correction rule: canonical만으로 선택 이유를 추정하지 말고, 사용자 복기 또는 피드백 확보 후 다시 태깅한다.
 
 ## `RELATION_DIRECTION_REVERSAL`
@@ -69,7 +69,7 @@ These tags are provisional mechanism labels for review and later promotion. They
 - Positive criteria: 화살표, 비교 방향, 수식 대상, 교환·보상·통제의 방향이 실제 선지 판단에서 뒤집혔을 때 사용한다.
 - Negative criteria: 명칭과 실제 속성을 혼동한 경우에는 TABLE_DIAGRAM_ENCODING_ERROR나 TEXTUAL_REDEFINITION_MISSED를 우선한다. 보완/대체 같은 방식어 오독은 TEXTUAL_REDEFINITION_MISSED를 우선한다.
 - Neighboring tags: TABLE_DIAGRAM_ENCODING_ERROR는 표·기호·변수 입력 자체가 흔들릴 때, TEXTUAL_REDEFINITION_MISSED는 지문식 정의나 방식어를 다른 뜻으로 처리했을 때 우선한다.
-- Representative review files: data/reviews/2021 추리논증 홀수형/q06.review.json, data/reviews/2021 추리논증 홀수형/q27.review.json, data/reviews/2023 언어이해 짝수형/q27.review.json
+- Representative review files: data/reviews/2019 언어이해 홀수형/q11.review.json, data/reviews/2021 추리논증 홀수형/q06.review.json, data/reviews/2021 추리논증 홀수형/q27.review.json, data/reviews/2023 언어이해 짝수형/q27.review.json
 - Suggested correction rule: 방향어가 나오면 `A -> B` 형식으로 다시 쓰고, 선지가 같은 방향을 보존하는지 확인한다.
 
 ## `ROLE_ATTRIBUTION_ERROR`
@@ -89,7 +89,7 @@ These tags are provisional mechanism labels for review and later promotion. They
 - Positive criteria: 예외 생략, 일부 조건만으로 강한 결론 도출, 가능성을 보장으로 읽기, 이상/이하 경계값 누락에 사용한다.
 - Negative criteria: 조건은 알았으나 여러 문항 전체에 끝까지 들고 가지 못한 경우에는 GLOBAL_CONSTRAINT_DROPPED를 우선한다.
 - Neighboring tags: TEXTUAL_REDEFINITION_MISSED는 지문이 용어 자체를 새로 정의했을 때, FORMAL_CONDITION_ERROR는 형식 논리·대수 조건 조작이 핵심일 때 쓴다.
-- Representative review files: data/reviews/2020 언어이해 홀수형/q16.review.json, data/reviews/2020 추리논증 홀수형/q02.review.json, data/reviews/2020 추리논증 홀수형/q06.review.json, data/reviews/2020 추리논증 홀수형/q08.review.json
+- Representative review files: data/reviews/2019 추리논증 홀수형/q13.review.json, data/reviews/2020 언어이해 홀수형/q16.review.json, data/reviews/2020 추리논증 홀수형/q02.review.json, data/reviews/2020 추리논증 홀수형/q06.review.json
 - Suggested correction rule: 선지의 결론 앞에 필요한 조건을 모두 붙여 보고, 하나라도 빠지면 답 후보에서 제외한다.
 
 ## `TABLE_DIAGRAM_ENCODING_ERROR`
@@ -99,7 +99,7 @@ These tags are provisional mechanism labels for review and later promotion. They
 - Positive criteria: 현재/선호 열, ㉠·㉡ 라벨, 투과율/반사율, 점수/등수, 평균/분포, 실험 비교 변수, 임계값을 잘못 인코딩했을 때 사용한다.
 - Negative criteria: 입력값은 맞게 읽었지만 전체 제약을 끝까지 유지하지 못했다면 GLOBAL_CONSTRAINT_DROPPED를 우선한다.
 - Neighboring tags: RELATION_DIRECTION_REVERSAL은 인코딩된 값의 방향만 뒤집힌 경우 secondary로 자주 붙는다. FORMAL_CONDITION_ERROR는 식 조작 자체가 핵심일 때 우선한다.
-- Representative review files: data/reviews/2020 추리논증 홀수형/q28.review.json, data/reviews/2020 추리논증 홀수형/q29.review.json, data/reviews/2020 추리논증 홀수형/q39.review.json, data/reviews/2022 추리논증 짝수형/q24.review.json
+- Representative review files: data/reviews/2019 추리논증 홀수형/q26.review.json, data/reviews/2019 추리논증 홀수형/q32.review.json, data/reviews/2020 추리논증 홀수형/q28.review.json, data/reviews/2020 추리논증 홀수형/q29.review.json
 - Suggested correction rule: 표·그래프·실험 설계는 선지로 가기 전에 한 줄 식, 2x2 표, 또는 변수 비교쌍으로 다시 쓴다.
 
 ## `TEXTUAL_REDEFINITION_MISSED`
@@ -129,5 +129,5 @@ These tags are provisional mechanism labels for review and later promotion. They
 - Positive criteria: 가능한 배경 설명을 직접 보충하거나, 불명확한 작용 경로를 임의로 제한했을 때 사용한다.
 - Negative criteria: 명시 조건을 잘못 적용한 경우에는 SCOPE_CONDITION_MISAPPLICATION을 우선한다.
 - Neighboring tags: CHOICE_VERIFICATION_FAILURE는 검산 누락, UNWARRANTED_ASSUMPTION_ADDED는 추가 전제가 판단을 움직였을 때 쓴다.
-- Representative review files: data/reviews/2020 추리논증 홀수형/q31.review.json, data/reviews/2021 언어이해 홀수형/q10.review.json, data/reviews/2022 추리논증 짝수형/q38.review.json
+- Representative review files: data/reviews/2019 추리논증 홀수형/q08.review.json, data/reviews/2020 언어이해 홀수형/q03.review.json, data/reviews/2020 추리논증 홀수형/q31.review.json, data/reviews/2021 언어이해 홀수형/q10.review.json
 - Suggested correction rule: 내가 덧붙인 문장이 지문에 있는지 표시하고, 없으면 선지 판단에서 제거한다.

@@ -31,8 +31,8 @@ These tags should not normally be promoted as primary final error mechanisms. Th
 - Meaning: the canonical question and grading are available, but the user's reasoning or feedback is insufficient to reconstruct the actual error mechanism.
 - Use when: self-review and assistant feedback are absent or too thin to support a mechanism diagnosis.
 - Do not promote to final tags.
-- Current policy: 2025 추리논증 records with this tag are holdouts for later re-solving and should not contribute to tag frequency, final tag promotion, or active evidence counts.
+- Current policy: no active record has this tag. Any future record with insufficient review evidence should be held out and should not contribute to tag frequency, final tag promotion, or active evidence counts.
 
 ## Holdout policy
 
-Holdout records remain in `provisional_tags.jsonl` for traceability, but they are excluded from active frequency and promotion analysis. They should be re-solved later, then reviewed again with fresh self-review and canonical-grounded assistant feedback.
+When holdout records exist, they remain in `provisional_tags.jsonl` for traceability but are excluded from active frequency and promotion analysis. They should be re-solved later, then reviewed again with fresh self-review and canonical-grounded assistant feedback.

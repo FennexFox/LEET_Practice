@@ -12,17 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 REVIEWS_DIR = ROOT / "data" / "reviews"
 CANONICAL_DIR = ROOT / "data" / "canonical"
 OUT_DIR = ROOT / "data" / "tagging"
-HOLDOUT_RECORDS = {
-    "data/reviews/2025 추리논증 짝수형/q09.review.json",
-    "data/reviews/2025 추리논증 짝수형/q23.review.json",
-    "data/reviews/2025 추리논증 짝수형/q29.review.json",
-    "data/reviews/2025 추리논증 짝수형/q33.review.json",
-    "data/reviews/2025 추리논증 짝수형/q34.review.json",
-}
+HOLDOUT_RECORDS: set[str] = set()
 HOLDOUT_REASON = (
-    "No user self-review or assistant feedback is available. The user chose not to "
-    "reconstruct the old reasoning from memory; this item should be re-solved later "
-    "and then re-reviewed."
+    "User self-review or assistant feedback is insufficient to identify an error "
+    "mechanism; this item should be re-solved and reviewed before activation."
 )
 HOLDOUT_REVISIT_PLAN = "resolve_after_retake"
 
@@ -146,9 +139,15 @@ TAG_DEFS: dict[str, dict[str, str]] = {
 
 
 ASSIGNMENTS: dict[str, Assignment] = {
-    "data/reviews/2020 언어이해 홀수형/q03.review.json": Assignment("CHOICE_VERIFICATION_FAILURE", ("UNWARRANTED_ASSUMPTION_ADDED",), "high", "과목 인상으로 2번을 배제하고 5번을 지문 변화 사례와 끝까지 대조하지 못했다."),
+    "data/reviews/2019 언어이해 홀수형/q11.review.json": Assignment("RELATION_DIRECTION_REVERSAL", ("CHOICE_VERIFICATION_FAILURE",), "high", "핵심 오류는 ②의 '이성으로부터의 해방'을 '이성에 의한 해방'으로 읽은 국소 문구 오독이다."),
+    "data/reviews/2019 추리논증 홀수형/q08.review.json": Assignment("UNWARRANTED_ASSUMPTION_ADDED", ("FORMAL_CONDITION_ERROR",), "high", "핵심 오류는 문제 안의 산식만으로 처리할 수 있는 사안을 외부 회계 개념으로 복잡화한 것이다."),
+    "data/reviews/2019 추리논증 홀수형/q13.review.json": Assignment("SCOPE_CONDITION_MISAPPLICATION", ("GLOBAL_CONSTRAINT_DROPPED",), "high", "핵심 오류는 신고 예외와 비행승인 예외를 하나의 중량 기준으로 통합해 버린 것이다."),
+    "data/reviews/2019 추리논증 홀수형/q22.review.json": Assignment("CONCEPT_LAYER_CONFUSION", ("UNWARRANTED_ASSUMPTION_ADDED",), "high", "핵심 오류는 B의 설명적 명제를 당위적 평등 승인 명제로 확장한 것이다."),
+    "data/reviews/2019 추리논증 홀수형/q26.review.json": Assignment("TABLE_DIAGRAM_ENCODING_ERROR", ("FORMAL_CONDITION_ERROR",), "high", "핵심 오류는 '비용이 제시되지 않았다'고 느끼면서 한계비용표를 만들지 못한 것이다."),
+    "data/reviews/2019 추리논증 홀수형/q32.review.json": Assignment("TABLE_DIAGRAM_ENCODING_ERROR", ("GLOBAL_CONSTRAINT_DROPPED",), "high", "핵심 오류는 복잡한 연결관계를 완성 가능한 후보 그래프로 검산하지 않고, 시각적 인상으로 ㄷ을 불가능하다고 판단한 것이다."),
+    "data/reviews/2020 언어이해 홀수형/q03.review.json": Assignment("UNWARRANTED_ASSUMPTION_ADDED", ("CHOICE_VERIFICATION_FAILURE",), "high", "과목 인상으로 2번을 배제하고 5번을 지문 변화 사례와 끝까지 대조하지 못했다."),
     "data/reviews/2020 언어이해 홀수형/q05.review.json": Assignment("CONCEPT_LAYER_CONFUSION", ("TEXTUAL_REDEFINITION_MISSED",), "high", "제도상 지위 인정, 규범적 승인, 예법상 효과를 같은 층위로 묶었다."),
-    "data/reviews/2020 언어이해 홀수형/q12.review.json": Assignment("CHOICE_VERIFICATION_FAILURE", ("CONCEPT_LAYER_CONFUSION",), "high", "양가성은 지나치게 엄격히 보면서 수용/거절의 행위 방향은 검산하지 않았다."),
+    "data/reviews/2020 언어이해 홀수형/q12.review.json": Assignment("CONCEPT_LAYER_CONFUSION", ("CHOICE_VERIFICATION_FAILURE",), "high", "양가성은 지나치게 엄격히 보면서 수용/거절의 행위 방향은 검산하지 않았다."),
     "data/reviews/2020 언어이해 홀수형/q16.review.json": Assignment("SCOPE_CONDITION_MISAPPLICATION", ("TEXTUAL_REDEFINITION_MISSED",), "high", "조건부 가능성을 실현 단정으로 읽고 보편성을 중립성과 동일시했다."),
     "data/reviews/2020 언어이해 홀수형/q20.review.json": Assignment("ROLE_ATTRIBUTION_ERROR", ("CHOICE_VERIFICATION_FAILURE",), "high", "3차원주의 언어를 4차원주의자에게 귀속한 선지를 충분히 걸러내지 못했다."),
     "data/reviews/2020 추리논증 홀수형/q02.review.json": Assignment("SCOPE_CONDITION_MISAPPLICATION", (), "high", "특별한 교육 수준 부정을 최소 학업성취 요구 부정으로 확장했다."),
@@ -161,7 +160,7 @@ ASSIGNMENTS: dict[str, Assignment] = {
     "data/reviews/2020 추리논증 홀수형/q31.review.json": Assignment("UNWARRANTED_ASSUMPTION_ADDED", (), "high", "명시되지 않은 B등급 조건을 잔여범주로 임의 보충했다."),
     "data/reviews/2020 추리논증 홀수형/q33.review.json": Assignment("FORMAL_CONDITION_ERROR", ("GLOBAL_CONSTRAINT_DROPPED",), "high", "블록을 만든 뒤 남은 원소의 상대순서 자유도를 검산하지 않았다."),
     "data/reviews/2020 추리논증 홀수형/q39.review.json": Assignment("TABLE_DIAGRAM_ENCODING_ERROR", ("TEXTUAL_REDEFINITION_MISSED", "RELATION_DIRECTION_REVERSAL"), "high", "양이온교환수지 명칭을 지문식 부호표로 재인코딩하지 못하고 양전하 수지로 읽었다."),
-    "data/reviews/2020 추리논증 홀수형/q40.review.json": Assignment("FORMAL_CONDITION_ERROR", (), "high", "전위차 조건을 절댓값 차이식이 아니라 합식처럼 세웠다.", True, "원본 review JSON에 쉼표 누락이 있어 좁은 in-memory repair로 읽었다."),
+    "data/reviews/2020 추리논증 홀수형/q40.review.json": Assignment("FORMAL_CONDITION_ERROR", (), "high", "전위차 조건을 절댓값 차이식이 아니라 합식처럼 세웠다."),
     "data/reviews/2021 언어이해 홀수형/q01.review.json": Assignment("CHOICE_VERIFICATION_FAILURE", (), "medium", "선지의 정오 방향을 마지막에 재확인하지 못한 것으로 리뷰가 정리한다."),
     "data/reviews/2021 언어이해 홀수형/q03.review.json": Assignment("SCOPE_CONDITION_MISAPPLICATION", (), "medium", "프로세스 마이닝 기능 적용 범위와 필요한 자료 여부를 분리하지 못했다."),
     "data/reviews/2021 언어이해 홀수형/q10.review.json": Assignment("UNWARRANTED_ASSUMPTION_ADDED", (), "medium", "일반 가능성을 특정 범죄·피해자·처벌 형식의 대응으로 연결했다."),
@@ -208,17 +207,17 @@ ASSIGNMENTS: dict[str, Assignment] = {
     "data/reviews/2023 추리논증 짝수형/q21.review.json": Assignment("ARGUMENT_STRUCTURE_INCOMPLETE", ("UNWARRANTED_ASSUMPTION_ADDED",), "high", "강화/약화에서 주장 대상의 방향을 좁게 잡고 자신의 구분을 선지에 보충했다."),
     "data/reviews/2023 추리논증 짝수형/q28.review.json": Assignment("CONCEPT_LAYER_CONFUSION", ("TABLE_DIAGRAM_ENCODING_ERROR",), "high", "현상 발생과 COVID 원인에 의한 발생, 평균과 하위집단 분포를 혼동했다."),
     "data/reviews/2023 추리논증 짝수형/q33.review.json": Assignment("SCOPE_CONDITION_MISAPPLICATION", (), "high", "많아야 1명이라는 상한 조건을 정확히 1명이라는 등식 조건으로 고정했다."),
-    "data/reviews/2025 언어이해 짝수형/q06.review.json": Assignment("CHOICE_VERIFICATION_FAILURE", ("TABLE_DIAGRAM_ENCODING_ERROR",), "medium", "도출한 효소/기질 결론과 실제 선택지가 대응하는지 최종 확인하지 않았다."),
+    "data/reviews/2025 언어이해 짝수형/q06.review.json": Assignment("TABLE_DIAGRAM_ENCODING_ERROR", ("CHOICE_VERIFICATION_FAILURE",), "medium", "도출한 효소/기질 결론과 실제 선택지가 대응하는지 최종 확인하지 않았다."),
     "data/reviews/2025 언어이해 짝수형/q13.review.json": Assignment("SCOPE_CONDITION_MISAPPLICATION", (), "high", "용인·인정의 조건부 표현을 지문 문맥보다 강하게 해석했다."),
     "data/reviews/2025 언어이해 짝수형/q14.review.json": Assignment("CHOICE_VERIFICATION_FAILURE", ("TIME_PRESSURE_OR_ATTENTION_LAPSE",), "medium", "어려운 정답 선지에 자원이 묶여 명백히 충돌하는 선택 선지를 재검증하지 못했다."),
     "data/reviews/2025 언어이해 짝수형/q20.review.json": Assignment("CHOICE_VERIFICATION_FAILURE", (), "medium", "소거 말미에 지문 조건 충족 검증 대신 상대적으로 덜 틀려 보이는 선지를 골랐다."),
     "data/reviews/2025 언어이해 짝수형/q21.review.json": Assignment("CHOICE_VERIFICATION_FAILURE", (), "low", "독립적 사고과정이 충분히 복원되지 않아 같은 지문 세트의 기준 이동 가설로만 남는다.", True, "사용자의 독립 리뷰 근거가 부족해 세트 연쇄 오류 가설만 가능하다."),
     "data/reviews/2025 언어이해 짝수형/q26.review.json": Assignment("CHOICE_VERIFICATION_FAILURE", (), "high", "배제형 문항에서 지문 정보 부족보다 지문 핵심과 직접 충돌하는 선지를 우선하지 못했다."),
-    "data/reviews/2025 추리논증 짝수형/q09.review.json": Assignment("INSUFFICIENT_REVIEW_BASIS", (), "low", "review 상태가 unreviewed이며 사고과정과 피드백이 비어 있다.", True, "사용자 self-review와 assistant feedback이 없어 canonical만으로 기제를 확정할 수 없다."),
-    "data/reviews/2025 추리논증 짝수형/q23.review.json": Assignment("INSUFFICIENT_REVIEW_BASIS", (), "low", "review 상태가 unreviewed이며 사고과정과 피드백이 비어 있다.", True, "사용자 self-review와 assistant feedback이 없어 canonical만으로 기제를 확정할 수 없다."),
-    "data/reviews/2025 추리논증 짝수형/q29.review.json": Assignment("INSUFFICIENT_REVIEW_BASIS", (), "low", "review 상태가 unreviewed이며 사고과정과 피드백이 비어 있다.", True, "사용자 self-review와 assistant feedback이 없어 canonical만으로 기제를 확정할 수 없다."),
-    "data/reviews/2025 추리논증 짝수형/q33.review.json": Assignment("INSUFFICIENT_REVIEW_BASIS", (), "low", "review 상태가 unreviewed이며 사고과정과 피드백이 비어 있다.", True, "사용자 self-review와 assistant feedback이 없어 canonical만으로 기제를 확정할 수 없다."),
-    "data/reviews/2025 추리논증 짝수형/q34.review.json": Assignment("INSUFFICIENT_REVIEW_BASIS", (), "low", "review 상태가 unreviewed이며 사고과정과 피드백이 비어 있다.", True, "사용자 self-review와 assistant feedback이 없어 canonical만으로 기제를 확정할 수 없다."),
+    "data/reviews/2025 추리논증 홀수형/q10.review.json": Assignment("SCOPE_CONDITION_MISAPPLICATION", ("FORMAL_CONDITION_ERROR",), "high", "광고 개시 직전 30일의 범위에 8월을 포함했고, 보기별 추가 가정에 따라 달라지는 적용 조문·기준기간·복수 계산값 비교를 분리하지 못했다."),
+    "data/reviews/2025 추리논증 홀수형/q14.review.json": Assignment("FORMAL_CONDITION_ERROR", ("CHOICE_VERIFICATION_FAILURE",), "high", "충분조건의 전건이 충족되지 않았다는 사실로 결론의 불성립을 도출했고, 잘못 판단한 ㄱ과 선지 조합에 의존해 ㄷ의 독립 검토도 생략했다."),
+    "data/reviews/2025 추리논증 홀수형/q17.review.json": Assignment("UNWARRANTED_ASSUMPTION_ADDED", ("CONCEPT_LAYER_CONFUSION",), "high", "본문에 없는 시점 2 이후의 실제 시간축을 추가하고, 동일 시점에서의 자기지시적 재평가를 시간의 진행으로 바꾸어 의도와 결과를 혼동했다."),
+    "data/reviews/2025 추리논증 홀수형/q33.review.json": Assignment("GLOBAL_CONSTRAINT_DROPPED", ("FORMAL_CONDITION_ERROR",), "high", "시뮬레이션을 완성한 뒤 원조건 전체를 역검산하지 않아 '병이 이미 구금되어 있었다'는 선후관계 제약을 누락했고 이를 날짜 부등식으로 고정하지 않았다."),
+    "data/reviews/2025 추리논증 홀수형/q34.review.json": Assignment("GLOBAL_CONSTRAINT_DROPPED", ("TIME_PRESSURE_OR_ATTENTION_LAPSE",), "high", "국소 발언 조건은 맞췄지만 남은 사과 수가 모두 달라야 한다는 전역 제약을 재검산하지 않았고, 숫자를 반복 수정한 뒤 발생한 중복을 시각적으로 놓쳤다."),
     "data/reviews/2026 언어이해 홀수형/q06.review.json": Assignment("GLOBAL_CONSTRAINT_DROPPED", (), "high", "지역 행의 완결성이 아니라 전체 의사결정표의 입력공간 처리 여부를 봐야 했다."),
     "data/reviews/2026 언어이해 홀수형/q10.review.json": Assignment("SCOPE_CONDITION_MISAPPLICATION", (), "high", "노비 제외라는 예외 조건 누락을 허용 가능한 축약으로 처리했다."),
     "data/reviews/2026 언어이해 홀수형/q12.review.json": Assignment("TEXTUAL_REDEFINITION_MISSED", ("RELATION_DIRECTION_REVERSAL",), "high", "제도 변화의 방식어인 보완·도입을 대체로 읽어 지문식 변화 구조를 바꾸었다."),
@@ -530,6 +529,13 @@ def write_summary(records: list[dict[str, Any]], review_count: int, parse_notes:
         for tag, count in primary_counts.most_common()
         if count >= 5 and tag != "INSUFFICIENT_REVIEW_BASIS"
     ]
+    holdout_status = (
+        "Holdout records remain visible in `provisional_tags.jsonl`, but they are not "
+        "active evidence for the provisional taxonomy and are excluded from tag "
+        "frequency and final-promotion analysis."
+        if holdout_records
+        else "No holdout records are currently present in `provisional_tags.jsonl`."
+    )
     freq_rows = [["Tag", "Primary count", "Primary+secondary count"]]
     for tag, count in primary_counts.most_common():
         freq_rows.append([f"`{tag}`", count, all_counts[tag]])
@@ -558,7 +564,7 @@ def write_summary(records: list[dict[str, Any]], review_count: int, parse_notes:
         "- Records with missing canonical data: 0",
         f"- Source JSON parse repairs used without modifying originals: {len(parse_notes)}",
         "",
-        "Holdout records remain visible in `provisional_tags.jsonl`, but they are not active evidence for the provisional taxonomy and are excluded from tag frequency and final-promotion analysis.",
+        holdout_status,
         "",
         "## Active Tag Frequency Table",
         "",
@@ -593,12 +599,12 @@ def write_summary(records: list[dict[str, Any]], review_count: int, parse_notes:
             "",
             "- Keep `SCOPE_CONDITION_MISAPPLICATION` separate from `GLOBAL_CONSTRAINT_DROPPED`: the former is about the scope of a condition, the latter about maintaining already-known global constraints.",
             "- Consider splitting `TABLE_DIAGRAM_ENCODING_ERROR` later if quantity/unit mistakes become frequent enough to justify a dedicated quantitative-unit tag.",
-            "- Do not promote `INSUFFICIENT_REVIEW_BASIS`; current instances are holdouts and must be replaced after re-solving and review.",
+            "- Do not promote `INSUFFICIENT_REVIEW_BASIS`; any future instance should remain a holdout until fresh self-review and feedback are available.",
             "- Keep `TIME_PRESSURE_OR_ATTENTION_LAPSE` as primary only when the review itself identifies fatigue, time pressure, or direct input lapse as the main cause.",
             "",
             "## Next Steps",
             "",
-            "1. Re-solve the holdout records, then add user self-review and assistant feedback before assigning mechanism tags.",
+            "1. If a future record lacks review evidence, hold it out until re-solving, user self-review, and assistant feedback are complete.",
             "2. Sample high-frequency tags against the original canonical question and passage records to confirm consistency.",
             "3. Promote only stable mechanism tags from active records into `final_error_tags`; leave operational, insufficient-basis, and holdout tags out of final labels unless explicitly approved.",
             "4. After promotion rules are settled, update the original review files in a separate, reviewed pass.",

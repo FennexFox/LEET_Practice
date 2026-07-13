@@ -34,21 +34,21 @@ Keep under observation:
 
 ## Active primary frequency after corrections
 
-Holdout records are excluded.
+There are currently no holdout records; future holdouts remain excluded.
 
 | Tag | Active primary count |
 | --- | ---: |
-| `SCOPE_CONDITION_MISAPPLICATION` | 16 |
-| `CONCEPT_LAYER_CONFUSION` | 12 |
+| `SCOPE_CONDITION_MISAPPLICATION` | 18 |
+| `CONCEPT_LAYER_CONFUSION` | 14 |
 | `ARGUMENT_STRUCTURE_INCOMPLETE` | 9 |
-| `FORMAL_CONDITION_ERROR` | 9 |
-| `CHOICE_VERIFICATION_FAILURE` | 8 |
-| `GLOBAL_CONSTRAINT_DROPPED` | 8 |
-| `TABLE_DIAGRAM_ENCODING_ERROR` | 7 |
+| `FORMAL_CONDITION_ERROR` | 10 |
+| `CHOICE_VERIFICATION_FAILURE` | 5 |
+| `GLOBAL_CONSTRAINT_DROPPED` | 10 |
+| `TABLE_DIAGRAM_ENCODING_ERROR` | 10 |
 | `ROLE_ATTRIBUTION_ERROR` | 4 |
-| `RELATION_DIRECTION_REVERSAL` | 3 |
+| `RELATION_DIRECTION_REVERSAL` | 4 |
 | `TEXTUAL_REDEFINITION_MISSED` | 3 |
-| `UNWARRANTED_ASSUMPTION_ADDED` | 3 |
+| `UNWARRANTED_ASSUMPTION_ADDED` | 6 |
 | `TIME_PRESSURE_OR_ATTENTION_LAPSE` | 2 |
 
 ## Notes for final-tag application
