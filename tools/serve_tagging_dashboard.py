@@ -6,7 +6,7 @@ import json
 import re
 import sys
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,9 +20,12 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_RETRY_QUESTIONS = 100
+MAX_RECENT_RETRY_SESSIONS = 50
 OUTPUT_ROOT = (dashboard.ROOT / "output").resolve()
 RETRY_OUTPUT_ROOT = (OUTPUT_ROOT / "pdf" / "retry-pdfs").resolve()
 RETRY_RESULTS_LOCK = threading.Lock()
+RETRY_SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+RETRY_SHORT_CODE_PATTERN = re.compile(r"^[0-9a-fA-F]{10}$")
 LANGUAGE_SECTION = "\uc5b8\uc5b4\uc774\ud574"
 REASONING_SECTION = "\ucd94\ub9ac\ub17c\uc99d"
 SECTION_ALIASES = {
@@ -50,6 +53,9 @@ class TaggingDashboardHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/retry-statuses":
             self._send_retry_statuses_json()
+            return
+        if path == "/api/retry-sessions":
+            self._send_retry_sessions_json()
             return
         if path == "/healthz":
             self._send_json({"ok": True})
@@ -109,8 +115,14 @@ class TaggingDashboardHandler(BaseHTTPRequestHandler):
     def _send_retry_results_html(self) -> None:
         query = parse_qs(urlparse(self.path).query)
         manifest = (query.get("manifest") or [""])[0]
+        session = (query.get("session") or [""])[0]
         try:
-            output = build_retry_results_page(manifest)
+            if manifest and session:
+                raise ValueError("Provide either manifest or session, not both")
+            manifest_reference: str | Path = (
+                resolve_retry_session_manifest(session) if session else manifest
+            )
+            output = build_retry_results_page(manifest_reference)
         except ValueError as exc:
             self._send_error(exc, wants_json=False, status=HTTPStatus.BAD_REQUEST)
             return
@@ -133,6 +145,14 @@ class TaggingDashboardHandler(BaseHTTPRequestHandler):
     def _send_retry_statuses_json(self) -> None:
         try:
             payload = retry_status_response()
+        except Exception as exc:
+            self._send_error(exc, wants_json=True)
+            return
+        self._send_json(payload)
+
+    def _send_retry_sessions_json(self) -> None:
+        try:
+            payload = retry_sessions_response()
         except Exception as exc:
             self._send_error(exc, wants_json=True)
             return
@@ -421,6 +441,138 @@ def resolve_retry_manifest(value: str | Path, *, must_exist: bool) -> Path:
     return path
 
 
+def _retry_manifest_generated_at(payload: dict[str, Any], path: Path) -> tuple[str, float]:
+    value = payload.get("generated_at")
+    if isinstance(value, str) and value.strip():
+        generated_at = value.strip()
+        try:
+            parsed = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return generated_at, parsed.timestamp()
+        except ValueError:
+            pass
+    modified = path.stat().st_mtime
+    return datetime.fromtimestamp(modified, timezone.utc).isoformat(), modified
+
+
+def _retry_session_records() -> list[dict[str, Any]]:
+    """Return validated local session metadata, newest first.
+
+    The internal manifest path and sort key are retained for server-side
+    resolution, but callers must project records before returning JSON.
+    """
+
+    if not RETRY_OUTPUT_ROOT.is_dir():
+        return []
+    api = _load_retry_result_api()
+    records: list[dict[str, Any]] = []
+    for candidate_path in RETRY_OUTPUT_ROOT.glob("*.json"):
+        try:
+            manifest_path = candidate_path.resolve()
+            if not manifest_path.is_relative_to(RETRY_OUTPUT_ROOT) or manifest_path.suffix.lower() != ".json":
+                continue
+            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                continue
+            manifest = api["load_manifest"](manifest_path)
+            generated_at, sort_timestamp = _retry_manifest_generated_at(raw, manifest_path)
+        except (OSError, json.JSONDecodeError, ValueError, TypeError, api["error"]):
+            continue
+
+        result_status = "not_submitted"
+        answered_count = 0
+        correct_count = 0
+        updated_at = None
+        try:
+            result_path = api["result_path"](
+                manifest["session_id"],
+                data_root=dashboard.ROOT / "data",
+            )
+            if result_path.is_file():
+                result = api["load_result"](result_path)
+                result_status = "submitted"
+                answered_count = sum(
+                    1 for item in result.items if item.selected_choice is not None
+                )
+                correct_count = sum(
+                    1 for item in result.items if str(item.outcome) == "correct"
+                )
+                updated_at = result.updated_at
+        except (OSError, ValueError, TypeError, api["error"]):
+            result_status = "invalid"
+
+        session_id = manifest["session_id"]
+        records.append(
+            {
+                "session_id": session_id,
+                "short_code": session_id[-10:] if RETRY_SHORT_CODE_PATTERN.fullmatch(session_id[-10:]) else None,
+                "generated_at": generated_at,
+                "title": manifest["title"],
+                "question_count": len(manifest["selected"]),
+                "result_status": result_status,
+                "answered_count": answered_count,
+                "correct_count": correct_count,
+                "updated_at": updated_at,
+                "result_entry_url": f"/retry-results?session={quote(session_id)}",
+                "_manifest_path": manifest_path,
+                "_sort_timestamp": sort_timestamp,
+            }
+        )
+    records.sort(key=lambda record: (-record["_sort_timestamp"], record["session_id"]))
+    return records
+
+
+def discover_retry_sessions(*, limit: int = MAX_RECENT_RETRY_SESSIONS) -> list[dict[str, Any]]:
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        raise ValueError("limit must be a positive integer")
+    public_fields = (
+        "session_id",
+        "short_code",
+        "generated_at",
+        "title",
+        "question_count",
+        "result_status",
+        "answered_count",
+        "correct_count",
+        "updated_at",
+        "result_entry_url",
+    )
+    return [
+        {field: record[field] for field in public_fields}
+        for record in _retry_session_records()[:limit]
+    ]
+
+
+def resolve_retry_session_manifest(value: str) -> Path:
+    session_reference = str(value or "").strip()
+    if not session_reference:
+        raise ValueError("Missing retry session ID or short code")
+    if not RETRY_SESSION_ID_PATTERN.fullmatch(session_reference):
+        raise ValueError("Enter a full session ID or its final 10 hexadecimal characters")
+
+    records = _retry_session_records()
+    exact = [record for record in records if record["session_id"] == session_reference]
+    if len(exact) == 1:
+        return exact[0]["_manifest_path"]
+    if len(exact) > 1:
+        raise ValueError("Multiple manifests use that session ID; remove the duplicate or use its manifest URL")
+
+    if not RETRY_SHORT_CODE_PATTERN.fullmatch(session_reference):
+        raise FileNotFoundError(f"Retry session not found: {session_reference}")
+    normalized = session_reference.lower()
+    matches = [
+        record
+        for record in records
+        if record["session_id"].lower().endswith(normalized)
+    ]
+    if not matches:
+        raise FileNotFoundError(f"Retry session not found: {session_reference}")
+    if len(matches) > 1:
+        raise ValueError("That short code is ambiguous; enter the full session ID")
+    return matches[0]["_manifest_path"]
+
+
 def next_retry_output_path() -> Path:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     return OUTPUT_ROOT / "pdf" / "retry-pdfs" / f"retry-{stamp}.pdf"
@@ -451,7 +603,7 @@ def create_retry_pdf_response(payload: object) -> dict[str, Any]:
         "pdf_url": pdf_url,
         "manifest_path": manifest_path,
         "manifest_url": manifest_url,
-        "result_entry_url": f"/retry-results?manifest={quote(manifest_path)}",
+        "result_entry_url": f"/retry-results?session={quote(bundle.session_id)}",
         "selected_count": len(bundle.selected),
         "skipped": skipped,
         "skipped_count": len(skipped),
@@ -538,7 +690,12 @@ def retry_status_response() -> dict[str, Any]:
     }
 
 
-def build_retry_results_page(manifest_reference: str) -> str:
+def retry_sessions_response() -> dict[str, Any]:
+    sessions = discover_retry_sessions()
+    return {"sessions": sessions, "count": len(sessions)}
+
+
+def build_retry_results_page(manifest_reference: str | Path) -> str:
     manifest_path = resolve_retry_manifest(manifest_reference, must_exist=True)
     relative_manifest = manifest_path.relative_to(dashboard.ROOT).as_posix()
     api = _load_retry_result_api()

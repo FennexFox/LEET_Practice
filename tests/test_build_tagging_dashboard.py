@@ -393,7 +393,7 @@ def test_retry_pdf_response_calls_shared_generator(monkeypatch):
     assert response["selected_count"] == 1
     assert response["session_id"] == "retry-test-session"
     assert response["pdf_url"].startswith("/download?")
-    assert response["result_entry_url"].startswith("/retry-results?manifest=")
+    assert response["result_entry_url"] == "/retry-results?session=retry-test-session"
     assert "selected" not in response
 
 
@@ -514,6 +514,141 @@ def test_retry_results_page_hides_answer_until_a_result_exists(monkeypatch, tmp_
     assert "data/reviews/exam/q01.review.json" in html
     assert "정답 4" not in html
     assert "fetch('/api/retry-results'" in html
+
+
+def _write_retry_manifest(
+    path: Path,
+    *,
+    session_id: str,
+    generated_at: str,
+    title: str = "Focused retry",
+    question_no: int = 1,
+    correct_choice: int = 4,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "session_id": session_id,
+                "generated_at": generated_at,
+                "title": title,
+                "selected": [
+                    {
+                        "review_file": f"data/reviews/exam/q{question_no:02d}.review.json",
+                        "question_id": f"exam-q{question_no:02d}",
+                        "year": 2025,
+                        "section": "추리논증",
+                        "question_no": question_no,
+                        "correct_choice": correct_choice,
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_retry_session_discovery_returns_private_data_free_recent_summaries(monkeypatch, tmp_path):
+    if str(TOOLS_DIR) not in sys.path:
+        sys.path.insert(0, str(TOOLS_DIR))
+
+    import serve_tagging_dashboard
+
+    retry_root = tmp_path / "output" / "pdf" / "retry-pdfs"
+    older_id = "retry-20260713T120000Z-1111111111"
+    newer_id = "retry-20260713T130000Z-2222222222"
+    older_path = retry_root / "older.json"
+    newer_path = retry_root / "newer.json"
+    _write_retry_manifest(
+        older_path,
+        session_id=older_id,
+        generated_at="2026-07-13T12:00:00+00:00",
+    )
+    _write_retry_manifest(
+        newer_path,
+        session_id=newer_id,
+        generated_at="2026-07-13T13:00:00+00:00",
+        title="Newest retry",
+        question_no=2,
+        correct_choice=3,
+    )
+    (retry_root / "broken.json").write_text("{not-json", encoding="utf-8")
+    monkeypatch.setattr(serve_tagging_dashboard, "RETRY_OUTPUT_ROOT", retry_root)
+    monkeypatch.setattr(serve_tagging_dashboard.dashboard, "ROOT", tmp_path)
+
+    api = serve_tagging_dashboard._load_retry_result_api()
+    api["save"](
+        newer_path,
+        [
+            {
+                "review_file": "data/reviews/exam/q02.review.json",
+                "selected_choice": 3,
+            }
+        ],
+        data_root=tmp_path / "data",
+    )
+
+    response = serve_tagging_dashboard.retry_sessions_response()
+
+    assert response["count"] == 2
+    assert [item["session_id"] for item in response["sessions"]] == [newer_id, older_id]
+    newest = response["sessions"][0]
+    assert newest["short_code"] == "2222222222"
+    assert newest["result_status"] == "submitted"
+    assert newest["answered_count"] == 1
+    assert newest["correct_count"] == 1
+    assert newest["result_entry_url"] == f"/retry-results?session={newer_id}"
+    assert "selected" not in newest
+    assert "correct_choice" not in newest
+    assert "manifest_path" not in newest
+
+
+def test_retry_session_resolution_supports_full_id_and_unique_short_code(monkeypatch, tmp_path):
+    if str(TOOLS_DIR) not in sys.path:
+        sys.path.insert(0, str(TOOLS_DIR))
+
+    import pytest
+    import serve_tagging_dashboard
+
+    retry_root = tmp_path / "retry-pdfs"
+    first = retry_root / "first.json"
+    second = retry_root / "second.json"
+    first_id = "retry-20260713T120000Z-abcdef1234"
+    second_id = "retry-20260713T130000Z-9999999999"
+    _write_retry_manifest(
+        first,
+        session_id=first_id,
+        generated_at="2026-07-13T12:00:00+00:00",
+    )
+    _write_retry_manifest(
+        second,
+        session_id=second_id,
+        generated_at="2026-07-13T13:00:00+00:00",
+        question_no=2,
+    )
+    monkeypatch.setattr(serve_tagging_dashboard, "RETRY_OUTPUT_ROOT", retry_root)
+    monkeypatch.setattr(serve_tagging_dashboard.dashboard, "ROOT", tmp_path)
+
+    assert serve_tagging_dashboard.resolve_retry_session_manifest(first_id) == first
+    assert serve_tagging_dashboard.resolve_retry_session_manifest("ABCDEF1234") == first
+    with pytest.raises(FileNotFoundError, match="not found"):
+        serve_tagging_dashboard.resolve_retry_session_manifest("0000000000")
+    with pytest.raises(FileNotFoundError, match="not found"):
+        serve_tagging_dashboard.resolve_retry_session_manifest("too-short")
+    with pytest.raises(ValueError, match="full session ID"):
+        serve_tagging_dashboard.resolve_retry_session_manifest("../escape")
+
+    duplicate = retry_root / "duplicate.json"
+    _write_retry_manifest(
+        duplicate,
+        session_id="retry-20260713T140000Z-abcdef1234",
+        generated_at="2026-07-13T14:00:00+00:00",
+        question_no=3,
+    )
+    with pytest.raises(ValueError, match="ambiguous"):
+        serve_tagging_dashboard.resolve_retry_session_manifest("abcdef1234")
 
 
 def test_retry_pdf_download_rejects_paths_outside_output():
