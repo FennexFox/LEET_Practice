@@ -52,12 +52,19 @@
 
 ## Progress
 
-- Not started.
+- Regenerated 95 provisional tagging rows and the static dashboard.
+- Verified all 95 `review_input_at` values exactly match source `user_self_review.updated_at` values.
+- Verified removing the new timestamp field makes every generated tagging row identical to the pre-change artifact.
+- Verified a 20-question recommendation is chronologically ascending within its tier and excludes the corpus's newest review inputs at that limit.
+- Generated dashboard JavaScript passed `node --check`.
+- Focused suite passed: 38 tests; full suite passed: 176 tests.
 
 ## Decision log
 
-- No verification decisions recorded yet.
+- Added a tracked-data assertion requiring every generated tagging record to carry a non-empty `review_input_at`.
+- Kept generated review/tag content unchanged apart from the new timestamp field and dashboard comparator code.
 
 ## Outcomes / Retrospective
 
-- Not completed yet.
+- The newest selected input in the 20-question smoke test was 2026-07-07, while the corpus newest was 2026-07-13, confirming recent reviews no longer jump ahead of older same-tier/tag candidates.
+- No residual test failures or artifact mismatches remain.

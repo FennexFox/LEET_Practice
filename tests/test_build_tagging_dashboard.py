@@ -48,6 +48,10 @@ def test_dashboard_counts_match_tagging_jsonl():
     records = load_records()
 
     assert len(records) == 95
+    assert all(
+        isinstance(record.get("review_input_at"), str) and record["review_input_at"]
+        for record in records
+    )
     assert sum(record["use_for_tag_frequency"] is True for record in records) == 95
     assert sum(record["holdout"] is True for record in records) == 0
     assert (
