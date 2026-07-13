@@ -218,6 +218,14 @@ Each file is keyed by the immutable session ID stored in the PDF's matching
 manifest under `output/pdf/retry-pdfs/`. It contains session timestamps and one
 item per selected review file:
 
+The live dashboard discovers these manifests without relying on PDF filenames.
+`/retry-results?session=<value>` accepts an exact session ID or a unique final
+10-character hexadecimal code. `/api/retry-sessions` returns only recent
+session metadata and aggregate submission counts; it does not expose selected
+items, correct choices, notes, or manifest paths. Discovery continues to work
+after restarting the server while the manifest remains in the retry-PDF output
+directory.
+
 ```json
 {
   "schema_version": 1,

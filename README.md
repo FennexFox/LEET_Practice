@@ -128,6 +128,12 @@ session. A blank answer is recorded as `skipped`; filled answers are graded
 locally against the manifest. The result-entry page does not reveal the answer
 key until the session has been submitted.
 
+You do not need to keep the generation tab open. Return to **기존 재풀이 결과
+입력** later and enter either the full session ID printed on the PDF's first
+page or its final 10-character code. The live dashboard also lists recent
+generated sessions and whether results have been submitted. If the short code
+matches more than one session, use the full ID.
+
 The next recommendation orders candidates by latest retry state: incorrect,
 skipped, then never retried. Questions whose latest retry answer is correct are
 excluded by default, including from an explicit selection. Enable **Include
@@ -150,7 +156,9 @@ PDFs and their reproducibility manifests are written together under
 cannot be discovered automatically. Saved session results are written to
 `data/retry_attempts/<session_id>.json`; this personal study data is ignored by
 Git and Graphify. Submitting the same session again replaces its saved answers
-instead of adding a duplicate attempt.
+instead of adding a duplicate attempt. Session lookup remains available across
+dashboard-server restarts as long as the matching manifest remains under
+`output/pdf/retry-pdfs/`.
 
 ## Design direction
 

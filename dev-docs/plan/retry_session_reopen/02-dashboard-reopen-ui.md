@@ -58,13 +58,31 @@
 
 ## Progress
 
-- Not started.
+- Added a labeled session lookup form for full IDs and final 10-character
+  codes, with explicit static-snapshot fallback behavior.
+- Added safe DOM rendering for recent session summaries and server-side result
+  links, plus automatic refresh after PDF generation.
+- Regenerated the tracked dashboard snapshot and documented delayed entry,
+  restart persistence, manifest retention, and API privacy boundaries.
+- Added dashboard markup, accessibility, static-mode, and API integration
+  regression checks.
 
 ## Decision log
 
 - Keep history read-only and bounded; editing happens only on the existing
   result-entry page.
+- Build result links from the server-validated session ID in JavaScript rather
+  than trusting an arbitrary URL value from the response.
+- Keep the full session ID visible in recent history so an ambiguous short code
+  always has a direct recovery path.
 
 ## Outcomes / Retrospective
 
-- Not completed yet.
+- Focused dashboard validation: 6 tests passed before the final static-mode
+  guard; its targeted checks also passed after regeneration.
+- Full regression validation: 168 tests passed.
+- HTTP smoke tests across two separate server processes returned three sessions
+  and HTTP 200 for both full-ID and short-code result pages on each process.
+- The registered browser-testing skill instructions were unavailable locally,
+  so validation used generated-HTML assertions and live HTTP requests.
+- `git diff --check` passed; only repository line-ending warnings remain.

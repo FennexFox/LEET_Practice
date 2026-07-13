@@ -571,6 +571,20 @@ def build_dashboard_html(
         </div>
         <div id="retryStatus" class="retry-status" aria-live="polite"></div>
       </div>
+      <div class="retry-history" aria-labelledby="retryHistoryTitle" lang="ko">
+        <div class="retry-history-copy">
+          <p class="eyebrow">Saved sessions</p>
+          <h3 id="retryHistoryTitle">기존 재풀이 결과 입력</h3>
+          <p id="retrySessionLookupHint">PDF 첫 페이지의 전체 세션 ID 또는 마지막 10자리 코드를 입력하세요.</p>
+        </div>
+        <form id="retrySessionLookup" class="retry-session-lookup">
+          <label class="retry-session-field" for="retrySessionCode"><span>세션 ID 또는 코드</span><input id="retrySessionCode" type="text" required maxlength="128" autocomplete="off" spellcheck="false" aria-describedby="retrySessionLookupHint"></label>
+          <button class="primary-action" type="submit">결과 입력 열기</button>
+        </form>
+        <p id="retrySessionHistoryStatus" class="retry-history-status" role="status" aria-live="polite"></p>
+        <ul id="recentRetrySessions" class="retry-session-list" aria-label="최근 생성한 재풀이 세션"></ul>
+        <p class="retry-history-note">최근 목록과 결과 입력은 <code>python tools/serve_tagging_dashboard.py</code>로 실행한 로컬 대시보드에서 사용할 수 있습니다.</p>
+      </div>
       <div class="table-note"><span id="recordCount"></span><span class="scroll-hint"> Scroll sideways for tags and rationale.</span></div>
       <div class="table-scroll records-scroll">
         <table id="recordsTable">
@@ -771,6 +785,29 @@ tbody tr:hover { background: #f8f9ff; }
 .retry-status.error { color: var(--danger); }
 .retry-status.success { color: #047857; }
 .retry-status a { font-weight: 750; }
+.retry-history { display: grid; grid-template-columns: minmax(220px, .9fr) minmax(360px, 1.4fr); gap: 14px 22px; align-items: end; margin: 12px 0; padding: 16px; background: #fbfcff; border: 1px solid var(--line); border-radius: 13px; box-shadow: var(--shadow); }
+.retry-history-copy { align-self: center; }
+.retry-history-copy h3 { margin: 0; font-size: 17px; }
+.retry-history-copy p:last-child { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+.retry-session-lookup { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; }
+.retry-session-field { display: grid; gap: 5px; }
+.retry-session-field > span { color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: .07em; text-transform: uppercase; }
+.retry-session-field input { width: 100%; height: 38px; border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 9px; color: var(--text); background: #fff; font-family: var(--mono); }
+.retry-session-field input:focus { border-color: var(--accent); outline: 3px solid rgba(79,70,229,.11); }
+.retry-session-lookup button { min-height: 38px; border: 1px solid var(--accent); border-radius: 8px; padding: 7px 12px; color: #fff; background: var(--accent); font-weight: 700; cursor: pointer; }
+.retry-session-lookup button:hover { border-color: var(--accent-dark); background: var(--accent-dark); }
+.retry-history-status { grid-column: 1 / -1; min-height: 17px; margin: 0; color: var(--muted); font-size: 12px; }
+.retry-history-status.error { color: var(--danger); }
+.retry-session-list { grid-column: 1 / -1; display: grid; gap: 8px; max-height: 360px; overflow-y: auto; margin: 0; padding: 0 4px 0 0; list-style: none; }
+.retry-session-item { display: grid; grid-template-columns: minmax(180px, 1.4fr) minmax(210px, 1fr) auto; gap: 10px 16px; align-items: center; padding: 11px 12px; background: #fff; border: 1px solid var(--line); border-radius: 9px; }
+.retry-session-item strong, .retry-session-item small { display: block; }
+.retry-session-item small { margin-top: 3px; color: var(--muted); }
+.retry-session-identifiers code { display: block; overflow-wrap: anywhere; color: #344054; font-size: 11px; }
+.retry-session-identifiers span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+.retry-session-open { justify-self: end; font-weight: 750; white-space: nowrap; }
+.retry-session-empty { padding: 12px; color: var(--muted); background: #fff; border: 1px dashed var(--line-strong); border-radius: 9px; text-align: center; }
+.retry-history-note { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 11px; }
+.retry-history-note code { font-family: var(--mono); }
 .retry-badge { display: inline-flex; border-radius: 999px; padding: 4px 8px; color: var(--muted); background: #f2f4f7; white-space: nowrap; }
 .retry-badge.correct { color: #047857; background: #ecfdf3; }
 .retry-badge.incorrect { color: #b42318; background: #fef3f2; }
@@ -801,6 +838,8 @@ summary { cursor: pointer; font-weight: 600; }
   .filter-search { grid-column: span 2; }
   .retry-builder { grid-template-columns: 1fr 1fr; }
   .retry-actions { grid-column: 1 / -1; }
+  .retry-history { grid-template-columns: 1fr; }
+  .retry-session-lookup, .retry-history-status, .retry-session-list, .retry-history-note { grid-column: 1; }
 }
 @media (max-width: 900px) {
   .overview-intro { grid-template-columns: 1fr; align-items: stretch; }
@@ -828,6 +867,9 @@ summary { cursor: pointer; font-weight: 600; }
   .filters label { justify-content: flex-start; white-space: normal; }
   .retry-builder { grid-template-columns: 1fr; }
   .retry-actions, .retry-generate, .retry-status { grid-column: auto; justify-content: flex-start; text-align: left; }
+  .retry-session-lookup { grid-template-columns: 1fr; }
+  .retry-session-item { grid-template-columns: 1fr; }
+  .retry-session-open { justify-self: start; }
   .scroll-hint { display: inline; }
 }
 """
@@ -1038,6 +1080,91 @@ function setRetryStatus(message, kind = '') {
   status.textContent = message;
 }
 
+function setRetryHistoryStatus(message, kind = '') {
+  const status = document.getElementById('retrySessionHistoryStatus');
+  status.className = `retry-history-status ${kind}`.trim();
+  status.textContent = message;
+}
+
+function retrySessionStatusLabel(session) {
+  if (session.result_status === 'submitted') {
+    return `제출 완료 · ${session.answered_count}/${session.question_count}개 답변 · ${session.correct_count}개 정답`;
+  }
+  if (session.result_status === 'invalid') return '저장된 결과를 읽을 수 없음';
+  return '아직 결과를 입력하지 않음';
+}
+
+function retrySessionDateLabel(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value || '생성 시각 없음';
+  return new Intl.DateTimeFormat('ko-KR', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit'
+  }).format(date);
+}
+
+function renderRecentRetrySessions(sessions) {
+  const list = document.getElementById('recentRetrySessions');
+  list.replaceChildren();
+  if (!sessions.length) {
+    const empty = document.createElement('li');
+    empty.className = 'retry-session-empty';
+    empty.textContent = '생성된 재풀이 세션이 없습니다.';
+    list.appendChild(empty);
+    return;
+  }
+  for (const session of sessions) {
+    const item = document.createElement('li');
+    item.className = 'retry-session-item';
+
+    const summary = document.createElement('div');
+    const title = document.createElement('strong');
+    title.textContent = session.title || '제목 없는 재풀이';
+    const detail = document.createElement('small');
+    const time = document.createElement('time');
+    time.dateTime = session.generated_at || '';
+    time.textContent = retrySessionDateLabel(session.generated_at);
+    detail.append(time, document.createTextNode(` · ${session.question_count}문항 · ${retrySessionStatusLabel(session)}`));
+    summary.append(title, detail);
+
+    const identifiers = document.createElement('div');
+    identifiers.className = 'retry-session-identifiers';
+    const fullId = document.createElement('code');
+    fullId.textContent = session.session_id;
+    const shortCode = document.createElement('span');
+    shortCode.textContent = session.short_code ? `코드 ${session.short_code}` : '짧은 코드 없음';
+    identifiers.append(fullId, shortCode);
+
+    const link = document.createElement('a');
+    link.className = 'retry-session-open';
+    link.href = `/retry-results?session=${encodeURIComponent(session.session_id)}`;
+    link.textContent = '결과 입력 열기';
+    link.setAttribute('aria-label', `${session.title || '재풀이'} 결과 입력 열기`);
+    item.append(summary, identifiers, link);
+    list.appendChild(item);
+  }
+}
+
+async function loadRecentRetrySessions() {
+  if (window.location.protocol === 'file:') {
+    renderRecentRetrySessions([]);
+    setRetryHistoryStatus('최근 세션을 불러오려면 로컬 대시보드 서버로 여세요.', 'error');
+    return;
+  }
+  setRetryHistoryStatus('최근 세션을 불러오는 중...');
+  try {
+    const response = await fetch('/api/retry-sessions');
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || result.error || '최근 세션을 불러오지 못했습니다.');
+    const sessions = Array.isArray(result.sessions) ? result.sessions : [];
+    renderRecentRetrySessions(sessions);
+    setRetryHistoryStatus(`${sessions.length}개의 최근 세션을 불러왔습니다.`);
+  } catch (error) {
+    renderRecentRetrySessions([]);
+    setRetryHistoryStatus(error.message || String(error), 'error');
+  }
+}
+
 function renderRows() {
   const rows = filteredRecords();
   tbody.replaceChildren();
@@ -1118,6 +1245,20 @@ document.getElementById('includeCompleted').addEventListener('change', event => 
   }
   renderRows();
 });
+document.getElementById('retrySessionLookup').addEventListener('submit', event => {
+  event.preventDefault();
+  const input = document.getElementById('retrySessionCode');
+  const session = input.value.trim();
+  if (!session) {
+    input.reportValidity();
+    return;
+  }
+  if (window.location.protocol === 'file:') {
+    setRetryHistoryStatus('결과 입력은 로컬 대시보드 서버에서 열어 주세요.', 'error');
+    return;
+  }
+  window.location.assign(`/retry-results?session=${encodeURIComponent(session)}`);
+});
 document.getElementById('generateRetryPdf').addEventListener('click', async () => {
   if (!selectedFiles.size) return;
   const button = document.getElementById('generateRetryPdf');
@@ -1148,6 +1289,7 @@ document.getElementById('generateRetryPdf').addEventListener('click', async () =
       link.textContent = label;
       status.append(link, document.createTextNode(' '));
     }
+    loadRecentRetrySessions();
   } catch (error) {
     setRetryStatus(error.message || String(error), 'error');
   } finally {
@@ -1155,6 +1297,7 @@ document.getElementById('generateRetryPdf').addEventListener('click', async () =
   }
 });
 renderRows();
+loadRecentRetrySessions();
 fetch('/api/retry-statuses')
   .then(response => response.ok ? response.json() : Promise.reject(new Error('Retry status unavailable')))
   .then(result => {

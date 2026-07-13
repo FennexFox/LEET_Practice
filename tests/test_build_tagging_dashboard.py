@@ -140,13 +140,34 @@ def test_dashboard_retry_pdf_controls_and_persistent_selection():
     assert 'id="retryStatusFilter"' in html
     assert 'id="retryLimit"' in html
     assert 'id="generateRetryPdf"' in html
+    assert 'id="retrySessionLookup"' in html
+    assert 'id="retrySessionCode"' in html
+    assert 'id="recentRetrySessions"' in html
     assert "const selectedFiles = new Set()" in html
     assert "recommendRecords(filteredRecords(), retryLimit())" in html
     assert "fetch('/api/retry-pdf'" in html
     assert "fetch('/api/retry-statuses')" in html
+    assert "fetch('/api/retry-sessions')" in html
     assert "['결과 입력', result.result_entry_url]" in html
+    assert "/retry-results?session=${encodeURIComponent(session)}" in html
+    assert "loadRecentRetrySessions();" in html
     assert "retryTier(record)" in html
     assert 'className = \'row-selector\'' in html
+
+
+def test_dashboard_retry_session_lookup_is_accessible_and_server_explicit():
+    builder = load_builder()
+    html = builder.build_current_dashboard_html()
+
+    assert '<h3 id="retryHistoryTitle">기존 재풀이 결과 입력</h3>' in html
+    assert '<label class="retry-session-field" for="retrySessionCode">' in html
+    assert 'aria-describedby="retrySessionLookupHint"' in html
+    assert 'id="retrySessionHistoryStatus"' in html
+    assert 'role="status" aria-live="polite"' in html
+    assert 'python tools/serve_tagging_dashboard.py' in html
+    assert "window.location.protocol === 'file:'" in html
+    assert "결과 입력은 로컬 대시보드 서버에서 열어 주세요." in html
+    assert "textContent = session.title" in html
 
 
 def test_dashboard_frequency_after_v1_corrections():

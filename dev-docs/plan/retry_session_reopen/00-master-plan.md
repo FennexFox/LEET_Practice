@@ -42,9 +42,10 @@
 
 ## Completion Status
 
-- Phase 1 completed with validated manifest discovery, ID resolution, and the
-  recent-session API.
-- Phase 2 not started.
+- Phase 1 completed in `4967636` with validated manifest discovery, ID
+  resolution, and the recent-session API.
+- Phase 2 completed with delayed-entry controls, recent history, documentation,
+  and restart validation.
 
 ## Known Risks And Assumptions
 
