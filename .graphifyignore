@@ -1,0 +1,23 @@
+# Graphify outputs and local/generated work products.
+graphify-out/
+artifacts/
+output/
+
+# Original exam sources and derived OCR/rendering intermediates.
+data/raw_pdfs/
+data/rendered_pages/
+data/ocr/
+data/verification/
+
+# Per-run and personal study data. These are useful to the application, but
+# add record-level noise without explaining the repository architecture.
+data/canonical/
+data/attempts/
+data/reviews/
+data/tagging/provisional_tags.jsonl
+
+# Generated presentation of the tagging data; analyze its builder instead.
+docs/tagging-dashboard.html
+
+# Dependency resolution output; pyproject.toml remains part of the graph.
+uv.lock
