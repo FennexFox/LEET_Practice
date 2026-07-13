@@ -2,6 +2,9 @@
 .chatgpt/
 .serena/
 
+# Generated local knowledge graph.
+graphify-out/
+
 # Python
 __pycache__/
 *.py[cod]
