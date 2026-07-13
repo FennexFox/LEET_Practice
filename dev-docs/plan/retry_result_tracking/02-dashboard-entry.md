@@ -61,12 +61,31 @@
 
 ## Progress
 
-- Not started.
+- Added validated result-entry and status-summary APIs, a result-entry page,
+  server-side grading integration, and safe manifest resolution.
+- Added live retry-status loading, badges, filters, latest-correct exclusion,
+  incorrect-first recommendations, Include completed, and post-generation
+  result-entry links.
+- Slimmed PDF generation responses so internal contexts and answer keys are not
+  returned to the dashboard client.
 
 ## Decision log
 
-- No decisions recorded yet.
+- Personal status is fetched from `/api/retry-statuses`; it is never embedded
+  in the generated static dashboard snapshot.
+- Result submission is a complete session batch. Blank choices are explicit
+  skipped outcomes and resubmitting the page corrects the same session.
+- Allowlisted tagging records are sufficient at request validation time;
+  canonical/review availability remains the shared generator's responsibility.
 
 ## Outcomes / Retrospective
 
-- Not completed yet.
+- Focused dashboard/core validation: 61 tests passed.
+- Full validation: 165 tests passed; both JavaScript bundles passed `node
+  --check` and `git diff --check` passed.
+- Live HTTP smoke: generated a one-question PDF, opened the result page,
+  submitted a correct answer, and observed `correct` in the status summary;
+  generated personal/output files were removed afterward.
+- In-app browser visual testing could not run because the browser runtime had
+  no available browser binding; HTTP and generated-HTML checks covered the
+  interaction path instead.

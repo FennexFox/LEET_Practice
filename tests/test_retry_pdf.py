@@ -7,6 +7,7 @@ import pytest
 
 from leet_practice.retry_pdf import create_retry_pdf_bundle, select_retry_questions
 from leet_practice.retry_results import RetryOutcome, RetryQuestionStatus
+from leet_practice.retry_results import save_retry_session_result
 
 
 def _tag_record(
@@ -232,3 +233,21 @@ def test_bundle_separates_problem_text_from_answer_appendix_and_writes_manifest(
     assert manifest["settings"]["selection_mode"] == "recommended"
     assert manifest["selected"][0]["review_file"] == "data/reviews/exam/q01.review.json"
     assert manifest["tag_summary"] == {"ATTENTION": 1, "VERIFICATION": 1}
+
+    save_retry_session_result(
+        bundle.manifest_path,
+        [
+            {"review_file": "data/reviews/exam/q01.review.json", "selected_choice": 1},
+            {"review_file": "data/reviews/exam/q02.review.json", "selected_choice": 2},
+        ],
+        data_root=data_root,
+    )
+    next_bundle = create_retry_pdf_bundle(
+        data_root=data_root,
+        output_path=tmp_path / "output" / "retry-next.pdf",
+        font_path=font_path,
+        title="Next Retry Workbook",
+    )
+    assert [context.review_file for context in next_bundle.selected] == [
+        "data/reviews/exam/q02.review.json"
+    ]

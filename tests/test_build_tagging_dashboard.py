@@ -121,11 +121,16 @@ def test_dashboard_retry_pdf_controls_and_persistent_selection():
     assert 'id="selectVisible"' in html
     assert 'id="clearSelection"' in html
     assert 'id="includeHoldouts"' in html
+    assert 'id="includeCompleted"' in html
+    assert 'id="retryStatusFilter"' in html
     assert 'id="retryLimit"' in html
     assert 'id="generateRetryPdf"' in html
     assert "const selectedFiles = new Set()" in html
     assert "recommendRecords(filteredRecords(), retryLimit())" in html
     assert "fetch('/api/retry-pdf'" in html
+    assert "fetch('/api/retry-statuses')" in html
+    assert "['결과 입력', result.result_entry_url]" in html
+    assert "retryTier(record)" in html
     assert 'className = \'row-selector\'' in html
 
 
@@ -291,6 +296,7 @@ def test_retry_pdf_payload_validates_allowlisted_review_files():
 
     assert result["review_files"] == [active["review_file"]]
     assert result["limit"] == 20
+    assert result["include_completed"] is False
 
     with pytest.raises(ValueError, match="Unknown review_file"):
         serve_tagging_dashboard.validate_retry_pdf_payload(
@@ -334,6 +340,7 @@ def test_retry_pdf_response_calls_shared_generator(monkeypatch):
     def fake_create(**kwargs):
         captured.update(kwargs)
         return SimpleNamespace(
+            session_id="retry-test-session",
             pdf_path=Path("output/retry-pdfs/example.pdf"),
             manifest_path=Path("output/retry-pdfs/example.json"),
             selected=[{"review_file": active["review_file"]}],
@@ -360,8 +367,131 @@ def test_retry_pdf_response_calls_shared_generator(monkeypatch):
     assert captured["output_path"].is_relative_to(ROOT / "output")
     assert captured["output_path"].suffix == ".pdf"
     assert captured["font_path"] is None
+    assert captured["include_completed"] is False
     assert response["selected_count"] == 1
+    assert response["session_id"] == "retry-test-session"
     assert response["pdf_url"].startswith("/download?")
+    assert response["result_entry_url"].startswith("/retry-results?manifest=")
+    assert "selected" not in response
+
+
+def test_retry_result_payload_rejects_answer_key_claims_and_normalizes_answers(monkeypatch):
+    if str(TOOLS_DIR) not in sys.path:
+        sys.path.insert(0, str(TOOLS_DIR))
+
+    import pytest
+    import serve_tagging_dashboard
+
+    manifest = ROOT / "output" / "pdf" / "retry-pdfs" / "session.json"
+    monkeypatch.setattr(
+        serve_tagging_dashboard,
+        "resolve_retry_manifest",
+        lambda value, must_exist: manifest,
+    )
+    result = serve_tagging_dashboard.validate_retry_result_payload(
+        {
+            "manifest_path": "output/pdf/retry-pdfs/session.json",
+            "answers": [
+                {
+                    "review_file": "data\\reviews\\exam\\q01.review.json",
+                    "selected_choice": 3,
+                    "note": "  다시 검산  ",
+                }
+            ],
+        }
+    )
+    assert result == {
+        "manifest_path": manifest,
+        "answers": [
+            {
+                "review_file": "data/reviews/exam/q01.review.json",
+                "selected_choice": 3,
+                "note": "다시 검산",
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="Unknown answer fields"):
+        serve_tagging_dashboard.validate_retry_result_payload(
+            {
+                "manifest_path": "session.json",
+                "answers": [
+                    {
+                        "review_file": "data/reviews/exam/q01.review.json",
+                        "selected_choice": 3,
+                        "correct_choice": 3,
+                    }
+                ],
+            }
+        )
+
+
+def test_retry_status_response_serializes_statuses(monkeypatch):
+    if str(TOOLS_DIR) not in sys.path:
+        sys.path.insert(0, str(TOOLS_DIR))
+
+    import serve_tagging_dashboard
+
+    status = SimpleNamespace(review_file="data/reviews/exam/q01.review.json")
+    monkeypatch.setattr(
+        serve_tagging_dashboard,
+        "_load_retry_result_api",
+        lambda: {
+            "load_statuses": lambda **kwargs: {status.review_file: status},
+            "status_payload": lambda value: {
+                "review_file": value.review_file,
+                "latest_outcome": "correct",
+                "attempt_count": 2,
+            },
+        },
+    )
+
+    response = serve_tagging_dashboard.retry_status_response()
+
+    assert response["by_review_file"][status.review_file]["latest_outcome"] == "correct"
+
+
+def test_retry_results_page_hides_answer_until_a_result_exists(monkeypatch, tmp_path):
+    if str(TOOLS_DIR) not in sys.path:
+        sys.path.insert(0, str(TOOLS_DIR))
+
+    import serve_tagging_dashboard
+
+    manifest_path = tmp_path / "session.json"
+    manifest_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(serve_tagging_dashboard.dashboard, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        serve_tagging_dashboard,
+        "resolve_retry_manifest",
+        lambda value, must_exist: manifest_path,
+    )
+    monkeypatch.setattr(
+        serve_tagging_dashboard,
+        "_load_retry_result_api",
+        lambda: {
+            "load_manifest": lambda path: {
+                "session_id": "retry-session",
+                "title": "집중력 재점검",
+                "selected": [
+                    {
+                        "review_file": "data/reviews/exam/q01.review.json",
+                        "year": 2025,
+                        "section": "언어이해",
+                        "question_no": 1,
+                        "correct_choice": 4,
+                    }
+                ],
+            },
+            "result_path": lambda *args, **kwargs: tmp_path / "missing-result.json",
+            "load_result": lambda path: None,
+        },
+    )
+
+    html = serve_tagging_dashboard.build_retry_results_page("session.json")
+
+    assert "재풀이 결과 입력" in html
+    assert "data/reviews/exam/q01.review.json" in html
+    assert "정답 4" not in html
+    assert "fetch('/api/retry-results'" in html
 
 
 def test_retry_pdf_download_rejects_paths_outside_output():

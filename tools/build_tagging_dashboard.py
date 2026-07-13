@@ -543,6 +543,7 @@ def build_dashboard_html(
         <label class="filter-field"><span>Year</span><select id="yearFilter"><option value="">All years</option>{''.join(f'<option>{h(year)}</option>' for year in years)}</select></label>
         <label class="filter-field"><span>Section</span><select id="sectionFilter"><option value="">All sections</option>{''.join(f'<option>{h(section)}</option>' for section in sections)}</select></label>
         <label class="filter-field"><span>Confidence</span><select id="confidenceFilter"><option value="">All levels</option>{''.join(f'<option>{h(conf)}</option>' for conf in confidences)}</select></label>
+        <label class="filter-field"><span>Retry status</span><select id="retryStatusFilter" disabled><option value="">All retry states</option><option value="never">Never retried</option><option value="correct">Latest correct</option><option value="incorrect">Latest incorrect</option><option value="skipped">Latest skipped</option></select></label>
         <div class="filter-toggles">
         <label><input id="hideHoldouts" type="checkbox"> Hide holdouts</label>
         <label><input id="needsOnly" type="checkbox"> Needs-review only</label>
@@ -558,6 +559,7 @@ def build_dashboard_html(
         <label class="retry-field"><span>Title</span><input id="retryTitle" type="text" maxlength="160" value="LEET 오답 재풀이"></label>
         <label class="retry-field retry-limit"><span>Recommendation size</span><input id="retryLimit" type="number" min="1" max="100" value="20"></label>
         <label class="retry-check"><input id="includeHoldouts" type="checkbox"> Include holdouts</label>
+        <label class="retry-check"><input id="includeCompleted" type="checkbox"> Include completed</label>
         <div class="retry-actions">
           <button id="recommendSelection" class="primary-action" type="button">추천 선택</button>
           <button id="selectVisible" type="button">Select all shown</button>
@@ -573,7 +575,7 @@ def build_dashboard_html(
       <div class="table-scroll records-scroll">
         <table id="recordsTable">
           <caption class="sr-only">Filterable tagging evidence records</caption>
-          <thead><tr><th scope="col"><span class="sr-only">PDF selection</span></th><th scope="col">Year</th><th scope="col">Section</th><th scope="col">Q</th><th scope="col">Review file</th><th scope="col">Selected</th><th scope="col">Correct</th><th scope="col">Primary tag</th><th scope="col">Secondary</th><th scope="col">Confidence</th><th scope="col">Needs review</th><th scope="col">Holdout</th><th scope="col">Use frequency</th><th scope="col">Use promotion</th><th scope="col">Rationale</th></tr></thead>
+          <thead><tr><th scope="col"><span class="sr-only">PDF selection</span></th><th scope="col">Year</th><th scope="col">Section</th><th scope="col">Q</th><th scope="col">Review file</th><th scope="col">Selected</th><th scope="col">Correct</th><th scope="col">Primary tag</th><th scope="col">Secondary</th><th scope="col">Confidence</th><th scope="col">Needs review</th><th scope="col">Holdout</th><th scope="col">Use frequency</th><th scope="col">Use promotion</th><th scope="col">Retry</th><th scope="col">Rationale</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -769,6 +771,10 @@ tbody tr:hover { background: #f8f9ff; }
 .retry-status.error { color: var(--danger); }
 .retry-status.success { color: #047857; }
 .retry-status a { font-weight: 750; }
+.retry-badge { display: inline-flex; border-radius: 999px; padding: 4px 8px; color: var(--muted); background: #f2f4f7; white-space: nowrap; }
+.retry-badge.correct { color: #047857; background: #ecfdf3; }
+.retry-badge.incorrect { color: #b42318; background: #fef3f2; }
+.retry-badge.skipped { color: #b54708; background: #fffaeb; }
 .row-selector { width: 16px; height: 16px; cursor: pointer; }
 .selected-row { background: var(--accent-soft); }
 .table-note { color: var(--muted); margin: 8px 0; }
@@ -831,10 +837,11 @@ JS = """
 const data = JSON.parse(document.getElementById('dashboard-data').textContent);
 const tbody = document.querySelector('#recordsTable tbody');
 const recordCount = document.getElementById('recordCount');
-const controls = ['searchInput','tagFilter','yearFilter','sectionFilter','confidenceFilter','hideHoldouts','needsOnly']
+const controls = ['searchInput','tagFilter','yearFilter','sectionFilter','confidenceFilter','retryStatusFilter','hideHoldouts','needsOnly']
   .map(id => document.getElementById(id));
 const selectedFiles = new Set();
 const confidenceOrder = {high: 0, medium: 1, low: 2};
+let retryStatusesLoaded = false;
 
 function cell(value) {
   const td = document.createElement('td');
@@ -867,6 +874,27 @@ function rationaleCell(value) {
   return td;
 }
 
+function retryOutcome(record) {
+  if (!retryStatusesLoaded) return 'unknown';
+  return record.retry_status ? record.retry_status.latest_outcome : 'never';
+}
+
+function retryStatusCell(record) {
+  const td = document.createElement('td');
+  const badge = document.createElement('span');
+  const outcome = retryOutcome(record);
+  badge.className = `retry-badge ${outcome}`;
+  if (outcome === 'unknown') badge.textContent = 'Loading';
+  else if (outcome === 'never') badge.textContent = 'Never';
+  else {
+    const attempts = record.retry_status.attempt_count;
+    badge.textContent = `${outcome} · ${attempts} ${attempts === 1 ? 'try' : 'tries'}`;
+    badge.title = `Last saved ${record.retry_status.last_answered_at}`;
+  }
+  td.appendChild(badge);
+  return td;
+}
+
 function selectorCell(record) {
   const td = document.createElement('td');
   const input = document.createElement('input');
@@ -874,7 +902,11 @@ function selectorCell(record) {
   input.className = 'row-selector';
   input.checked = selectedFiles.has(record.review_file);
   input.disabled = !isRetryEligible(record);
-  if (input.disabled) input.title = 'Enable Include holdouts to select this record.';
+  if (input.disabled) {
+    input.title = record.holdout
+      ? 'Enable Include holdouts to select this record.'
+      : 'Enable Include completed to select a latest-correct record.';
+  }
   input.setAttribute('aria-label', `Select ${reviewLabel(record)} for retry PDF`);
   input.addEventListener('change', () => {
     if (input.checked) selectedFiles.add(record.review_file);
@@ -905,12 +937,14 @@ function matches(record) {
   const year = document.getElementById('yearFilter').value;
   const section = document.getElementById('sectionFilter').value;
   const confidence = document.getElementById('confidenceFilter').value;
+  const retryStatus = document.getElementById('retryStatusFilter').value;
   const tags = [record.provisional_tags.primary].concat(record.provisional_tags.secondary || []);
   if (query && !JSON.stringify(record).toLowerCase().includes(query)) return false;
   if (tag && !tags.includes(tag)) return false;
   if (year && String(record.year) !== year) return false;
   if (section && record.section !== section) return false;
   if (confidence && record.provisional_tags.confidence !== confidence) return false;
+  if (retryStatus && retryOutcome(record) !== retryStatus) return false;
   if (document.getElementById('hideHoldouts').checked && record.holdout) return false;
   if (document.getElementById('needsOnly').checked && !record.needs_review) return false;
   return true;
@@ -921,8 +955,10 @@ function filteredRecords() {
 }
 
 function isRetryEligible(record) {
-  return Boolean(record.use_for_tag_frequency) ||
+  const baseEligible = Boolean(record.use_for_tag_frequency) ||
     (document.getElementById('includeHoldouts').checked && Boolean(record.holdout));
+  if (!baseEligible) return false;
+  return retryOutcome(record) !== 'correct' || document.getElementById('includeCompleted').checked;
 }
 
 function retryLimit() {
@@ -945,9 +981,9 @@ function compareRetryRecords(left, right) {
     );
 }
 
-function recommendRecords(records, limit) {
+function balancedRecommendation(records, limit) {
   const groups = new Map();
-  for (const record of records.filter(isRetryEligible)) {
+  for (const record of records) {
     const tag = record.provisional_tags.primary;
     if (!groups.has(tag)) groups.set(tag, []);
     groups.get(tag).push(record);
@@ -962,6 +998,26 @@ function recommendRecords(records, limit) {
       const record = group.items.shift();
       if (record) recommendation.push(record);
     }
+  }
+  return recommendation;
+}
+
+function retryTier(record) {
+  const outcome = retryOutcome(record);
+  if (outcome === 'incorrect') return 0;
+  if (outcome === 'skipped') return 1;
+  if (outcome === 'correct') return 3;
+  return 2;
+}
+
+function recommendRecords(records, limit) {
+  const eligible = records.filter(isRetryEligible);
+  const tiers = document.getElementById('includeCompleted').checked ? [0, 1, 2, 3] : [0, 1, 2];
+  const recommendation = [];
+  for (const tier of tiers) {
+    const remaining = limit - recommendation.length;
+    if (remaining <= 0) break;
+    recommendation.push(...balancedRecommendation(eligible.filter(record => retryTier(record) === tier), remaining));
   }
   return recommendation;
 }
@@ -999,6 +1055,7 @@ function renderRows() {
       record.use_for_tag_frequency ? 'yes' : 'no',
       record.use_for_final_tag_promotion ? 'yes' : 'no'
     ].forEach(value => tr.appendChild(cell(value)));
+    tr.appendChild(retryStatusCell(record));
     tr.appendChild(rationaleCell(record.tag_rationale));
     tbody.appendChild(tr);
   }
@@ -1006,7 +1063,7 @@ function renderRows() {
     const tr = document.createElement('tr');
     tr.className = 'empty-row';
     const td = document.createElement('td');
-    td.colSpan = 15;
+    td.colSpan = 16;
     td.textContent = 'No records match these filters. Reset or broaden the search.';
     tr.appendChild(td);
     tbody.appendChild(tr);
@@ -1053,6 +1110,14 @@ document.getElementById('includeHoldouts').addEventListener('change', event => {
   }
   renderRows();
 });
+document.getElementById('includeCompleted').addEventListener('change', event => {
+  if (!event.target.checked) {
+    data.records
+      .filter(record => retryOutcome(record) === 'correct')
+      .forEach(record => selectedFiles.delete(record.review_file));
+  }
+  renderRows();
+});
 document.getElementById('generateRetryPdf').addEventListener('click', async () => {
   if (!selectedFiles.size) return;
   const button = document.getElementById('generateRetryPdf');
@@ -1067,6 +1132,7 @@ document.getElementById('generateRetryPdf').addEventListener('click', async () =
         review_files: Array.from(selectedFiles),
         limit: selectedFiles.size,
         include_holdout: document.getElementById('includeHoldouts').checked,
+        include_completed: document.getElementById('includeCompleted').checked,
         title
       })
     });
@@ -1075,7 +1141,7 @@ document.getElementById('generateRetryPdf').addEventListener('click', async () =
     const status = document.getElementById('retryStatus');
     status.className = 'retry-status success';
     status.replaceChildren(document.createTextNode(`Created ${result.selected_count} questions. `));
-    for (const [label, href] of [['Download PDF', result.pdf_url], ['Manifest', result.manifest_url]]) {
+    for (const [label, href] of [['Download PDF', result.pdf_url], ['결과 입력', result.result_entry_url], ['Manifest', result.manifest_url]]) {
       if (!href) continue;
       const link = document.createElement('a');
       link.href = href;
@@ -1089,6 +1155,19 @@ document.getElementById('generateRetryPdf').addEventListener('click', async () =
   }
 });
 renderRows();
+fetch('/api/retry-statuses')
+  .then(response => response.ok ? response.json() : Promise.reject(new Error('Retry status unavailable')))
+  .then(result => {
+    const statuses = result.by_review_file || {};
+    data.records.forEach(record => { record.retry_status = statuses[record.review_file] || null; });
+    retryStatusesLoaded = true;
+    document.getElementById('retryStatusFilter').disabled = false;
+    renderRows();
+  })
+  .catch(error => {
+    document.getElementById('retryStatusFilter').disabled = true;
+    setRetryStatus(error.message || String(error), 'error');
+  });
 """
 
 

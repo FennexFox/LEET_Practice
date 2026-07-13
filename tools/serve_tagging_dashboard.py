@@ -5,6 +5,7 @@ import dataclasses
 import json
 import re
 import sys
+import threading
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -20,6 +21,8 @@ DEFAULT_PORT = 8765
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_RETRY_QUESTIONS = 100
 OUTPUT_ROOT = (dashboard.ROOT / "output").resolve()
+RETRY_OUTPUT_ROOT = (OUTPUT_ROOT / "pdf" / "retry-pdfs").resolve()
+RETRY_RESULTS_LOCK = threading.Lock()
 LANGUAGE_SECTION = "\uc5b8\uc5b4\uc774\ud574"
 REASONING_SECTION = "\ucd94\ub9ac\ub17c\uc99d"
 SECTION_ALIASES = {
@@ -39,8 +42,14 @@ class TaggingDashboardHandler(BaseHTTPRequestHandler):
         if path == "/review":
             self._send_review_html()
             return
+        if path == "/retry-results":
+            self._send_retry_results_html()
+            return
         if path == "/api/dashboard":
             self._send_dashboard_json()
+            return
+        if path == "/api/retry-statuses":
+            self._send_retry_statuses_json()
             return
         if path == "/healthz":
             self._send_json({"ok": True})
@@ -51,16 +60,24 @@ class TaggingDashboardHandler(BaseHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def do_POST(self) -> None:
-        if urlparse(self.path).path != "/api/retry-pdf":
+        path = urlparse(self.path).path
+        if path not in {"/api/retry-pdf", "/api/retry-results"}:
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
             return
         try:
             payload = self._read_json_request()
-            response = create_retry_pdf_response(payload)
+            response = (
+                create_retry_pdf_response(payload)
+                if path == "/api/retry-pdf"
+                else save_retry_result_response(payload)
+            )
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             self._send_error(exc, wants_json=True, status=HTTPStatus.BAD_REQUEST)
             return
         except Exception as exc:
+            if path == "/api/retry-results" and isinstance(exc, _load_retry_result_api()["error"]):
+                self._send_error(exc, wants_json=True, status=HTTPStatus.BAD_REQUEST)
+                return
             retry_error = retry_pdf_error_type()
             status = HTTPStatus.UNPROCESSABLE_ENTITY if isinstance(exc, retry_error) else HTTPStatus.INTERNAL_SERVER_ERROR
             self._send_error(exc, wants_json=True, status=status)
@@ -89,9 +106,33 @@ class TaggingDashboardHandler(BaseHTTPRequestHandler):
             return
         self._send_bytes(output.encode("utf-8"), "text/html; charset=utf-8")
 
+    def _send_retry_results_html(self) -> None:
+        query = parse_qs(urlparse(self.path).query)
+        manifest = (query.get("manifest") or [""])[0]
+        try:
+            output = build_retry_results_page(manifest)
+        except ValueError as exc:
+            self._send_error(exc, wants_json=False, status=HTTPStatus.BAD_REQUEST)
+            return
+        except FileNotFoundError as exc:
+            self._send_error(exc, wants_json=False, status=HTTPStatus.NOT_FOUND)
+            return
+        except Exception as exc:
+            self._send_error(exc, wants_json=False)
+            return
+        self._send_bytes(output.encode("utf-8"), "text/html; charset=utf-8")
+
     def _send_dashboard_json(self) -> None:
         try:
             payload = dashboard.build_dashboard_data()
+        except Exception as exc:
+            self._send_error(exc, wants_json=True)
+            return
+        self._send_json(payload)
+
+    def _send_retry_statuses_json(self) -> None:
+        try:
+            payload = retry_status_response()
         except Exception as exc:
             self._send_error(exc, wants_json=True)
             return
@@ -182,6 +223,41 @@ def _load_retry_pdf_api() -> tuple[Any, type[Exception]]:
     return create_retry_pdf_bundle, RetryPdfError
 
 
+def _load_retry_result_api() -> dict[str, Any]:
+    try:
+        from leet_practice.retry_results import (
+            RetryResultError,
+            load_latest_retry_statuses,
+            load_retry_manifest,
+            load_retry_session_result,
+            retry_result_path,
+            retry_status_payload,
+            save_retry_session_result,
+        )
+    except ModuleNotFoundError:
+        src_dir = dashboard.ROOT / "src"
+        if str(src_dir) not in sys.path:
+            sys.path.insert(0, str(src_dir))
+        from leet_practice.retry_results import (
+            RetryResultError,
+            load_latest_retry_statuses,
+            load_retry_manifest,
+            load_retry_session_result,
+            retry_result_path,
+            retry_status_payload,
+            save_retry_session_result,
+        )
+    return {
+        "error": RetryResultError,
+        "load_statuses": load_latest_retry_statuses,
+        "load_manifest": load_retry_manifest,
+        "load_result": load_retry_session_result,
+        "result_path": retry_result_path,
+        "status_payload": retry_status_payload,
+        "save": save_retry_session_result,
+    }
+
+
 def retry_pdf_error_type() -> type[Exception]:
     try:
         return _load_retry_pdf_api()[1]
@@ -216,6 +292,7 @@ def validate_retry_pdf_payload(payload: object) -> dict[str, Any]:
         "years",
         "sections",
         "include_holdout",
+        "include_completed",
         "title",
     }
     unknown_fields = sorted(set(payload) - allowed_fields)
@@ -242,8 +319,6 @@ def validate_retry_pdf_payload(payload: object) -> dict[str, Any]:
         unknown_files = [item for item in review_files if item not in records_by_file]
         if unknown_files:
             raise ValueError(f"Unknown review_file: {unknown_files[0]}")
-        for review_file in review_files:
-            resolve_review_path(review_file)
 
     limit = payload.get("limit", 20)
     if isinstance(limit, bool) or not isinstance(limit, int):
@@ -258,6 +333,10 @@ def validate_retry_pdf_payload(payload: object) -> dict[str, Any]:
         selected_holdouts = [item for item in review_files if records_by_file[item].get("holdout")]
         if selected_holdouts:
             raise ValueError("A holdout record was selected without include_holdout=true")
+
+    include_completed = payload.get("include_completed", False)
+    if not isinstance(include_completed, bool):
+        raise TypeError("include_completed must be a boolean")
 
     title = payload.get("title", "LEET 오답 재풀이")
     if not isinstance(title, str):
@@ -298,6 +377,7 @@ def validate_retry_pdf_payload(payload: object) -> dict[str, Any]:
         "years": years,
         "sections": sections,
         "include_holdout": include_holdout,
+        "include_completed": include_completed,
         "title": title,
     }
 
@@ -334,6 +414,13 @@ def _output_reference(path_value: str | Path) -> tuple[str, str]:
     return relative, f"/download?file={quote(relative)}"
 
 
+def resolve_retry_manifest(value: str | Path, *, must_exist: bool) -> Path:
+    path = resolve_output_file(value, must_exist=must_exist)
+    if not path.is_relative_to(RETRY_OUTPUT_ROOT) or path.suffix.lower() != ".json":
+        raise ValueError("Retry manifest must be a JSON file under output/pdf/retry-pdfs")
+    return path
+
+
 def next_retry_output_path() -> Path:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     return OUTPUT_ROOT / "pdf" / "retry-pdfs" / f"retry-{stamp}.pdf"
@@ -350,24 +437,218 @@ def create_retry_pdf_response(payload: object) -> dict[str, Any]:
         years=options["years"],
         sections=options["sections"],
         include_holdout=options["include_holdout"],
+        include_completed=options["include_completed"],
         title=options["title"],
         output_path=next_retry_output_path(),
         font_path=None,
     )
     pdf_path, pdf_url = _output_reference(bundle.pdf_path)
     manifest_path, manifest_url = _output_reference(bundle.manifest_path)
-    selected = _json_safe(bundle.selected)
     skipped = _json_safe(bundle.skipped)
     return {
+        "session_id": bundle.session_id,
         "pdf_path": pdf_path,
         "pdf_url": pdf_url,
         "manifest_path": manifest_path,
         "manifest_url": manifest_url,
-        "selected": selected,
-        "selected_count": len(selected),
+        "result_entry_url": f"/retry-results?manifest={quote(manifest_path)}",
+        "selected_count": len(bundle.selected),
         "skipped": skipped,
         "skipped_count": len(skipped),
     }
+
+
+def validate_retry_result_payload(payload: object) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise TypeError("JSON body must be an object")
+    unknown = sorted(set(payload) - {"manifest_path", "answers"})
+    if unknown:
+        raise ValueError(f"Unknown fields: {', '.join(unknown)}")
+    manifest_value = payload.get("manifest_path")
+    if not isinstance(manifest_value, str) or not manifest_value.strip():
+        raise TypeError("manifest_path must be a non-empty string")
+    manifest_path = resolve_retry_manifest(manifest_value.strip(), must_exist=True)
+    answers = payload.get("answers")
+    if not isinstance(answers, list) or not 1 <= len(answers) <= MAX_RETRY_QUESTIONS:
+        raise TypeError(f"answers must be a list with 1-{MAX_RETRY_QUESTIONS} items")
+    normalized: list[dict[str, Any]] = []
+    for raw in answers:
+        if not isinstance(raw, dict):
+            raise TypeError("Each answer must be an object")
+        extra = sorted(set(raw) - {"review_file", "selected_choice", "note"})
+        if extra:
+            raise ValueError(f"Unknown answer fields: {', '.join(extra)}")
+        review_file = raw.get("review_file")
+        if not isinstance(review_file, str) or not review_file.strip():
+            raise TypeError("answer review_file must be a non-empty string")
+        choice = raw.get("selected_choice")
+        if choice is not None and (isinstance(choice, bool) or not isinstance(choice, int) or not 1 <= choice <= 5):
+            raise ValueError("selected_choice must be 1-5 or null")
+        note = raw.get("note")
+        if note is not None and (not isinstance(note, str) or len(note) > 2000):
+            raise ValueError("note must be a string with at most 2000 characters")
+        normalized.append(
+            {
+                "review_file": review_file.strip().replace("\\", "/"),
+                "selected_choice": choice,
+                "note": note.strip() if isinstance(note, str) else None,
+            }
+        )
+    return {"manifest_path": manifest_path, "answers": normalized}
+
+
+def _session_result_payload(result: Any) -> dict[str, Any]:
+    items = _json_safe(result.items)
+    answered = sum(1 for item in items if item["selected_choice"] is not None)
+    correct = sum(1 for item in items if item["outcome"] == "correct")
+    total = len(items)
+    return {
+        "session_id": result.session_id,
+        "title": result.title,
+        "created_at": result.created_at,
+        "updated_at": result.updated_at,
+        "total": total,
+        "answered": answered,
+        "correct": correct,
+        "accuracy": (correct / answered) if answered else None,
+        "items": items,
+    }
+
+
+def save_retry_result_response(payload: object) -> dict[str, Any]:
+    options = validate_retry_result_payload(payload)
+    api = _load_retry_result_api()
+    with RETRY_RESULTS_LOCK:
+        result = api["save"](
+            options["manifest_path"],
+            options["answers"],
+            data_root=dashboard.ROOT / "data",
+        )
+    return _session_result_payload(result)
+
+
+def retry_status_response() -> dict[str, Any]:
+    api = _load_retry_result_api()
+    statuses = api["load_statuses"](data_root=dashboard.ROOT / "data")
+    return {
+        "by_review_file": {
+            review_file: api["status_payload"](status)
+            for review_file, status in sorted(statuses.items())
+        }
+    }
+
+
+def build_retry_results_page(manifest_reference: str) -> str:
+    manifest_path = resolve_retry_manifest(manifest_reference, must_exist=True)
+    relative_manifest = manifest_path.relative_to(dashboard.ROOT).as_posix()
+    api = _load_retry_result_api()
+    manifest = api["load_manifest"](manifest_path)
+    result_path = api["result_path"](manifest["session_id"], data_root=dashboard.ROOT / "data")
+    existing = api["load_result"](result_path) if result_path.is_file() else None
+    existing_by_file = {item.review_file: item for item in existing.items} if existing else {}
+    rows: list[str] = []
+    for item in manifest["selected"]:
+        stored = existing_by_file.get(item["review_file"])
+        options = ['<option value="">건너뜀 / 미입력</option>']
+        for choice in range(1, 6):
+            selected = " selected" if stored and stored.selected_choice == choice else ""
+            options.append(f'<option value="{choice}"{selected}>{choice}</option>')
+        outcome = str(stored.outcome) if stored else "pending"
+        result_text = (
+            f"{outcome} - 정답 {stored.correct_choice}" if stored else "아직 제출하지 않음"
+        )
+        note = stored.note if stored else ""
+        rows.append(
+            f"""
+            <tr data-review-file="{dashboard.h(item['review_file'])}">
+              <td>{dashboard.h(item.get('year'))} {dashboard.h(item.get('section'))}</td>
+              <td>{dashboard.h(item['question_no'])}</td>
+              <td><select class="result-choice" aria-label="Q{dashboard.h(item['question_no'])} 재풀이 답">{''.join(options)}</select></td>
+              <td><input class="result-note" type="text" maxlength="2000" value="{dashboard.h(note)}" placeholder="선택적 메모"></td>
+              <td><span class="result-outcome {dashboard.h(outcome)}">{dashboard.h(result_text)}</span></td>
+            </tr>
+            """
+        )
+    manifest_json = json.dumps(relative_manifest, ensure_ascii=False).replace("<", "\\u003c")
+    return f"""<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{dashboard.h(manifest['title'])} - 재풀이 결과</title>
+  <style>{dashboard.CSS}{RETRY_RESULTS_CSS}</style>
+</head>
+<body>
+  <header class="app-header"><div class="header-inner"><div class="brand-block"><span class="brand-mark">LP</span><div><p>Retry session</p><h1>재풀이 결과 입력</h1></div></div><a class="header-action" href="/">대시보드</a></div></header>
+  <main class="retry-results-main">
+    <section>
+      <p class="eyebrow">{dashboard.h(manifest['session_id'])}</p>
+      <h2>{dashboard.h(manifest['title'])}</h2>
+      <p class="result-intro">PDF를 푼 뒤 선택한 답을 입력하세요. 빈 답은 건너뜀으로 저장되어 다음 추천에 남습니다.</p>
+      <form id="retryResultsForm">
+        <div class="table-scroll"><table><thead><tr><th>시험</th><th>문항</th><th>재풀이 답</th><th>메모</th><th>결과</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>
+        <div class="result-actions"><strong id="resultSummary" aria-live="polite"></strong><button class="primary-action" type="submit">결과 저장</button></div>
+      </form>
+    </section>
+  </main>
+  <script>const retryManifestPath = {manifest_json};{RETRY_RESULTS_JS}</script>
+</body>
+</html>"""
+
+
+RETRY_RESULTS_CSS = """
+.retry-results-main { max-width: 1080px; margin: 0 auto; padding: 36px 24px 64px; }
+.result-intro { color: var(--muted); }
+.result-choice, .result-note { width: 100%; min-height: 38px; border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 9px; background: #fff; }
+.result-note { min-width: 260px; }
+.result-outcome { display: inline-flex; border-radius: 999px; padding: 4px 8px; color: var(--muted); background: #f2f4f7; white-space: nowrap; }
+.result-outcome.correct { color: #047857; background: #ecfdf3; }
+.result-outcome.incorrect { color: #b42318; background: #fef3f2; }
+.result-outcome.skipped { color: #b54708; background: #fffaeb; }
+.result-actions { display: flex; align-items: center; justify-content: flex-end; gap: 14px; margin-top: 16px; }
+.result-actions button { min-height: 40px; border: 0; border-radius: 8px; padding: 8px 16px; color: #fff; background: var(--accent); font-weight: 750; cursor: pointer; }
+@media (max-width: 700px) { .retry-results-main { padding: 24px 16px 48px; } .result-actions { justify-content: space-between; } }
+"""
+
+
+RETRY_RESULTS_JS = r"""
+document.getElementById('retryResultsForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = event.submitter;
+  const summary = document.getElementById('resultSummary');
+  button.disabled = true;
+  summary.textContent = '저장 중...';
+  const answers = Array.from(document.querySelectorAll('tbody tr')).map(row => {
+    const rawChoice = row.querySelector('.result-choice').value;
+    return {
+      review_file: row.dataset.reviewFile,
+      selected_choice: rawChoice ? Number.parseInt(rawChoice, 10) : null,
+      note: row.querySelector('.result-note').value.trim() || null
+    };
+  });
+  try {
+    const response = await fetch('/api/retry-results', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({manifest_path: retryManifestPath, answers})
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || result.error || '결과 저장 실패');
+    const byFile = new Map(result.items.map(item => [item.review_file, item]));
+    document.querySelectorAll('tbody tr').forEach(row => {
+      const item = byFile.get(row.dataset.reviewFile);
+      const badge = row.querySelector('.result-outcome');
+      badge.className = `result-outcome ${item.outcome}`;
+      badge.textContent = `${item.outcome} - 정답 ${item.correct_choice}`;
+    });
+    summary.textContent = `${result.answered}/${result.total} 입력 - ${result.correct}개 정답`;
+  } catch (error) {
+    summary.textContent = error.message || String(error);
+  } finally {
+    button.disabled = false;
+  }
+});
+"""
 
 
 def resolve_review_path(review_file: str) -> Path:
