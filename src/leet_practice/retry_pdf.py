@@ -6,11 +6,19 @@ import html
 import json
 import os
 import re
+import uuid
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Mapping, Sequence
+
+from leet_practice.retry_results import (
+    RetryOutcome,
+    RetryQuestionStatus,
+    RetryResultError,
+    load_latest_retry_statuses,
+)
 
 
 DEFAULT_DATA_ROOT = Path("data")
@@ -53,6 +61,7 @@ class RetryQuestionContext:
 class RetryPdfBundle:
     """Paths and selection details produced by one workbook generation."""
 
+    session_id: str
     pdf_path: Path
     manifest_path: Path
     selected: list[RetryQuestionContext]
@@ -149,6 +158,70 @@ def _record_sort_key(record: dict[str, Any]) -> tuple[int, int, str, int, str]:
     )
 
 
+def _effective_retry_outcome(
+    record: dict[str, Any],
+    status: RetryQuestionStatus | None,
+) -> RetryOutcome | None:
+    if status is None:
+        return None
+    if status.last_selected_choice is None:
+        return RetryOutcome.SKIPPED
+    try:
+        current_correct = int(record.get("correct_choice"))
+    except (TypeError, ValueError):
+        current_correct = status.correct_choice
+    return (
+        RetryOutcome.CORRECT
+        if status.last_selected_choice == current_correct
+        else RetryOutcome.INCORRECT
+    )
+
+
+def _history_tier(
+    record: dict[str, Any],
+    *,
+    data_root: Path,
+    retry_statuses: Mapping[str, RetryQuestionStatus],
+) -> int:
+    outcome = _effective_retry_outcome(
+        record,
+        retry_statuses.get(_record_review_key(record, data_root=data_root)),
+    )
+    if outcome is RetryOutcome.INCORRECT:
+        return 0
+    if outcome is RetryOutcome.SKIPPED:
+        return 1
+    if outcome is None:
+        return 2
+    return 3
+
+
+def _balanced_selection(
+    records: Sequence[dict[str, Any]],
+    *,
+    limit: int,
+    weakness_counts: Counter[str],
+) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for record in records:
+        grouped[_record_tags(record)[0]].append(record)
+    for group in grouped.values():
+        group.sort(key=_record_sort_key)
+    ordered_tags = sorted(grouped, key=lambda tag: (-weakness_counts.get(tag, 0), tag))
+    selected: list[dict[str, Any]] = []
+    while len(selected) < limit:
+        added = False
+        for primary_tag in ordered_tags:
+            if grouped[primary_tag]:
+                selected.append(grouped[primary_tag].pop(0))
+                added = True
+                if len(selected) >= limit:
+                    break
+        if not added:
+            break
+    return selected
+
+
 def select_retry_questions(
     records: Sequence[dict[str, Any]],
     *,
@@ -159,6 +232,8 @@ def select_retry_questions(
     years: Sequence[int] | None = None,
     sections: Sequence[str] | None = None,
     include_holdout: bool = False,
+    retry_statuses: Mapping[str, RetryQuestionStatus] | None = None,
+    include_completed: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     """Select records explicitly or via deterministic, tag-balanced ranking."""
 
@@ -167,7 +242,8 @@ def select_retry_questions(
     tag_filter = {str(tag) for tag in (tags or []) if tag}
     year_filter = {int(year) for year in (years or [])}
     section_filter = {str(section) for section in (sections or []) if section}
-    eligible = [
+    retry_statuses = retry_statuses or {}
+    base_eligible = [
         record
         for record in records
         if _eligible_record(
@@ -178,10 +254,17 @@ def select_retry_questions(
             include_holdout=include_holdout,
         )
     ]
+    eligible = [
+        record
+        for record in base_eligible
+        if include_completed
+        or _history_tier(record, data_root=data_root, retry_statuses=retry_statuses) != 3
+    ]
     skipped: list[dict[str, str]] = []
 
     if review_files:
         all_by_key = {_record_review_key(record, data_root=data_root): record for record in records}
+        base_eligible_keys = {_record_review_key(record, data_root=data_root) for record in base_eligible}
         eligible_keys = {_record_review_key(record, data_root=data_root) for record in eligible}
         selected: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -194,8 +277,15 @@ def select_retry_questions(
                 key = matches[0] if len(matches) == 1 else key
             if record is None:
                 skipped.append({"review_file": key, "reason": "tagging record not found"})
-            elif key not in eligible_keys:
+            elif key not in base_eligible_keys:
                 skipped.append({"review_file": key, "reason": "excluded by filters or holdout policy"})
+            elif key not in eligible_keys:
+                skipped.append(
+                    {
+                        "review_file": key,
+                        "reason": "latest retry result is correct; pass include_completed to include it",
+                    }
+                )
             elif key not in seen:
                 selected.append(record)
                 seen.add(key)
@@ -210,24 +300,20 @@ def select_retry_questions(
         and not record.get("holdout")
         and record.get("use_for_tag_frequency", True)
     )
-    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for record in eligible:
-        grouped[_record_tags(record)[0]].append(record)
-    for group in grouped.values():
-        group.sort(key=_record_sort_key)
-    ordered_tags = sorted(grouped, key=lambda tag: (-weakness_counts.get(tag, 0), tag))
-
-    selected = []
-    while len(selected) < limit:
-        added = False
-        for primary_tag in ordered_tags:
-            if grouped[primary_tag]:
-                selected.append(grouped[primary_tag].pop(0))
-                added = True
-                if len(selected) >= limit:
-                    break
-        if not added:
+    selected: list[dict[str, Any]] = []
+    tier_order = (0, 1, 2, 3) if include_completed else (0, 1, 2)
+    for tier in tier_order:
+        remaining = limit - len(selected)
+        if remaining <= 0:
             break
+        tier_records = [
+            record
+            for record in eligible
+            if _history_tier(record, data_root=data_root, retry_statuses=retry_statuses) == tier
+        ]
+        selected.extend(
+            _balanced_selection(tier_records, limit=remaining, weakness_counts=weakness_counts)
+        )
     return selected, skipped
 
 
@@ -488,6 +574,7 @@ def render_retry_pdf(
     output_path: Path,
     title: str = DEFAULT_TITLE,
     font_path: Path | None = None,
+    session_id: str | None = None,
 ) -> Path:
     """Render a problem-first workbook followed by a separate answer appendix."""
 
@@ -541,7 +628,11 @@ def render_retry_pdf(
     story: list[Any] = [
         Paragraph(_paragraph_text(title), styles["title"]),
         Paragraph(
-            _paragraph_text(f"문항 수 {len(contexts)} - 정답과 분석은 뒤쪽 해설부에 있습니다."), styles["subtitle"]
+            _paragraph_text(
+                f"문항 수 {len(contexts)} - 정답과 분석은 뒤쪽 해설부에 있습니다."
+                + (f" - 세션 {session_id}" if session_id else "")
+            ),
+            styles["subtitle"],
         ),
         Paragraph("문제", styles["section"]),
     ]
@@ -632,6 +723,11 @@ def _default_output_path() -> Path:
     return DEFAULT_OUTPUT_DIR / f"retry-{stamp}.pdf"
 
 
+def _new_session_id() -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"retry-{stamp}-{uuid.uuid4().hex[:10]}"
+
+
 def create_retry_pdf_bundle(
     *,
     data_root: Path = DEFAULT_DATA_ROOT,
@@ -641,6 +737,7 @@ def create_retry_pdf_bundle(
     years: Sequence[int] | None = None,
     sections: Sequence[str] | None = None,
     include_holdout: bool = False,
+    include_completed: bool = False,
     title: str = DEFAULT_TITLE,
     output_path: Path | None = None,
     font_path: Path | None = None,
@@ -649,6 +746,10 @@ def create_retry_pdf_bundle(
 
     data_root = Path(data_root)
     records = load_tagging_records(data_root=data_root)
+    try:
+        retry_statuses = load_latest_retry_statuses(data_root=data_root)
+    except RetryResultError as exc:
+        raise RetryPdfError(f"Could not load retry history: {exc}") from exc
     selected_records, selection_skipped = select_retry_questions(
         records,
         data_root=data_root,
@@ -658,18 +759,28 @@ def create_retry_pdf_bundle(
         years=years,
         sections=sections,
         include_holdout=include_holdout,
+        retry_statuses=retry_statuses,
+        include_completed=include_completed,
     )
     contexts, hydration_skipped = load_retry_question_contexts(selected_records, data_root=data_root)
     skipped = [*selection_skipped, *hydration_skipped]
     if not contexts:
         detail = f" ({len(skipped)} skipped)" if skipped else ""
         raise RetryPdfError(f"No selectable wrong-answer questions were found{detail}")
+    session_id = _new_session_id()
     pdf_path = Path(output_path) if output_path is not None else _default_output_path()
-    pdf_path = render_retry_pdf(contexts, output_path=pdf_path, title=title, font_path=font_path)
+    pdf_path = render_retry_pdf(
+        contexts,
+        output_path=pdf_path,
+        title=title,
+        font_path=font_path,
+        session_id=session_id,
+    )
     manifest_path = pdf_path.with_suffix(".json")
     tag_summary = Counter(context.primary_tag for context in contexts)
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "session_id": session_id,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "title": title,
         "settings": {
@@ -678,6 +789,7 @@ def create_retry_pdf_bundle(
             "years": list(years or []),
             "sections": list(sections or []),
             "include_holdout": include_holdout,
+            "include_completed": include_completed,
             "selection_mode": "explicit" if review_files else "recommended",
         },
         "pdf_path": str(pdf_path),
@@ -690,6 +802,7 @@ def create_retry_pdf_bundle(
     except OSError as exc:
         raise RetryPdfError(f"PDF was created but manifest could not be written: {exc}") from exc
     return RetryPdfBundle(
+        session_id=session_id,
         pdf_path=pdf_path,
         manifest_path=manifest_path,
         selected=list(contexts),

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from leet_practice.retry_pdf import create_retry_pdf_bundle, select_retry_questions
+from leet_practice.retry_results import RetryOutcome, RetryQuestionStatus
 
 
 def _tag_record(
@@ -84,6 +85,79 @@ def test_explicit_selection_preserves_order_and_reports_filtered_items() -> None
     ]
 
 
+def _status(
+    review_file: str,
+    outcome: RetryOutcome,
+    *,
+    selected_choice: int | None,
+) -> RetryQuestionStatus:
+    return RetryQuestionStatus(
+        review_file=review_file,
+        latest_outcome=outcome,
+        attempt_count=1 if selected_choice is not None else 0,
+        session_count=1,
+        last_selected_choice=selected_choice,
+        correct_choice=1,
+        last_answered_at="2026-07-13T00:00:00+00:00",
+        last_session_id="retry-session",
+    )
+
+
+def test_retry_history_prioritizes_incorrect_and_excludes_latest_correct() -> None:
+    records = [
+        _tag_record("new", "A", question_no=1),
+        _tag_record("correct", "B", question_no=2),
+        _tag_record("wrong", "C", question_no=3),
+        _tag_record("skipped", "D", question_no=4),
+    ]
+    statuses = {
+        "data/reviews/exam/correct.review.json": _status(
+            "data/reviews/exam/correct.review.json", RetryOutcome.CORRECT, selected_choice=1
+        ),
+        "data/reviews/exam/wrong.review.json": _status(
+            "data/reviews/exam/wrong.review.json", RetryOutcome.INCORRECT, selected_choice=2
+        ),
+        "data/reviews/exam/skipped.review.json": _status(
+            "data/reviews/exam/skipped.review.json", RetryOutcome.SKIPPED, selected_choice=None
+        ),
+    }
+
+    selected, _ = select_retry_questions(
+        records,
+        data_root=Path("data"),
+        limit=4,
+        retry_statuses=statuses,
+    )
+
+    assert [row["review_file"] for row in selected] == [
+        "data/reviews/exam/wrong.review.json",
+        "data/reviews/exam/skipped.review.json",
+        "data/reviews/exam/new.review.json",
+    ]
+
+
+def test_include_completed_restores_correct_questions_after_unresolved() -> None:
+    records = [
+        _tag_record("correct", "A", question_no=1),
+        _tag_record("new", "B", question_no=2),
+    ]
+    review_file = "data/reviews/exam/correct.review.json"
+    statuses = {review_file: _status(review_file, RetryOutcome.CORRECT, selected_choice=1)}
+
+    selected, _ = select_retry_questions(
+        records,
+        data_root=Path("data"),
+        limit=2,
+        retry_statuses=statuses,
+        include_completed=True,
+    )
+
+    assert [row["review_file"] for row in selected] == [
+        "data/reviews/exam/new.review.json",
+        review_file,
+    ]
+
+
 def test_bundle_separates_problem_text_from_answer_appendix_and_writes_manifest(tmp_path: Path) -> None:
     reportlab = pytest.importorskip("reportlab")
     pytest.importorskip("pypdf")
@@ -152,6 +226,9 @@ def test_bundle_separates_problem_text_from_answer_appendix_and_writes_manifest(
     assert "ATTENTION" in all_text
     assert all_text.count("Shared passage text.") == 1
     manifest = json.loads(bundle.manifest_path.read_text(encoding="utf-8"))
+    assert bundle.session_id == manifest["session_id"]
+    assert manifest["schema_version"] == 2
+    assert manifest["settings"]["include_completed"] is False
     assert manifest["settings"]["selection_mode"] == "recommended"
     assert manifest["selected"][0]["review_file"] == "data/reviews/exam/q01.review.json"
     assert manifest["tag_summary"] == {"ATTENTION": 1, "VERIFICATION": 1}

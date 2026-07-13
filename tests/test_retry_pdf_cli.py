@@ -18,6 +18,7 @@ def test_retry_pdf_help_lists_selection_and_output_options() -> None:
         "--year",
         "--section",
         "--include-holdout",
+        "--include-completed",
         "--review-file",
         "--title",
         "--output",
@@ -38,7 +39,7 @@ def test_retry_pdf_forwards_filters_manual_selection_and_paths(tmp_path: Path, m
 
     def fake_create_retry_pdf_bundle(**kwargs):
         captured.update(kwargs)
-        return SimpleNamespace(pdf_path=pdf_path, manifest_path=manifest_path)
+        return SimpleNamespace(session_id="retry-test", pdf_path=pdf_path, manifest_path=manifest_path)
 
     monkeypatch.setattr(cli.retry_pdf_workflow, "create_retry_pdf_bundle", fake_create_retry_pdf_bundle)
 
@@ -61,6 +62,7 @@ def test_retry_pdf_forwards_filters_manual_selection_and_paths(tmp_path: Path, m
             "--section",
             "추리논증",
             "--include-holdout",
+            "--include-completed",
             "--review-file",
             str(review_a),
             "--review-file",
@@ -85,11 +87,13 @@ def test_retry_pdf_forwards_filters_manual_selection_and_paths(tmp_path: Path, m
         "years": [2024, 2025],
         "sections": ["언어이해", "추리논증"],
         "include_holdout": True,
+        "include_completed": True,
         "title": "집중력 재점검",
         "output_path": pdf_path,
         "font_path": font_path,
     }
     assert "PDF:" in result.output
+    assert "Session: retry-test" in result.output
     assert "retry.pdf" in result.output
     assert "Manifest:" in result.output
     assert "retry.json" in result.output
@@ -101,7 +105,11 @@ def test_retry_pdf_uses_documented_defaults(tmp_path: Path, monkeypatch) -> None
 
     def fake_create_retry_pdf_bundle(**kwargs):
         captured.update(kwargs)
-        return SimpleNamespace(pdf_path=pdf_path, manifest_path=pdf_path.with_suffix(".json"))
+        return SimpleNamespace(
+            session_id="retry-default",
+            pdf_path=pdf_path,
+            manifest_path=pdf_path.with_suffix(".json"),
+        )
 
     monkeypatch.setattr(cli.retry_pdf_workflow, "create_retry_pdf_bundle", fake_create_retry_pdf_bundle)
 
@@ -116,6 +124,7 @@ def test_retry_pdf_uses_documented_defaults(tmp_path: Path, monkeypatch) -> None
         "years": [],
         "sections": [],
         "include_holdout": False,
+        "include_completed": False,
         "title": "LEET 오답 재풀이",
         "output_path": None,
         "font_path": None,

@@ -112,6 +112,11 @@ def retry_pdf_command(
     year: list[int] = typer.Option([], "--year", help="Exam year to include. Repeat for multiple years."),
     section: list[str] = typer.Option([], "--section", help="Exam section to include. Repeat for multiple sections."),
     include_holdout: bool = typer.Option(False, "--include-holdout", help="Allow holdout questions to be selected."),
+    include_completed: bool = typer.Option(
+        False,
+        "--include-completed",
+        help="Include questions whose latest retry result is correct.",
+    ),
     review_file: list[Path] = typer.Option(
         [],
         "--review-file",
@@ -133,6 +138,7 @@ def retry_pdf_command(
             years=year,
             sections=section,
             include_holdout=include_holdout,
+            include_completed=include_completed,
             title=title,
             output_path=output,
             font_path=font,
@@ -141,6 +147,7 @@ def retry_pdf_command(
         console.print(f"[red]Retry PDF generation failed:[/red] {exc}")
         raise typer.Exit(1) from exc
 
+    console.print(f"Session: {bundle.session_id}")
     console.print(f"PDF: {bundle.pdf_path}")
     console.print(f"Manifest: {bundle.manifest_path}")
 

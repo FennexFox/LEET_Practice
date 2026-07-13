@@ -14,6 +14,7 @@ data/verification/
 data/canonical/
 data/attempts/
 data/reviews/
+data/retry_attempts/
 data/tagging/provisional_tags.jsonl
 
 # Generated presentation of the tagging data; analyze its builder instead.

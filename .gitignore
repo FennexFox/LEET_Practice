@@ -57,6 +57,10 @@ data/reviews/**
 !data/reviews/
 !data/reviews/.gitkeep
 
+data/retry_attempts/**
+!data/retry_attempts/
+!data/retry_attempts/.gitkeep
+
 artifacts/**
 !artifacts/
 !artifacts/.gitkeep
