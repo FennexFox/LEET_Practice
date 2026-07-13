@@ -411,6 +411,7 @@ def build_record(
         "selected_choice": selected,
         "correct_choice": correct,
         "is_correct": grading.get("is_correct"),
+        "review_input_at": self_review.get("updated_at"),
         "problem_metadata": {
             "question_type": question_type,
             "domain_or_topic": infer_domain(section, stem, passage),

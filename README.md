@@ -148,7 +148,9 @@ skipped, then never retried. Questions whose latest retry answer is correct are
 excluded by default, including from an explicit selection. Enable **Include
 completed** to include them again. Objective difficulty is not used in this
 retry-history policy; the existing tag-balanced ordering still distributes
-questions across vulnerable primary tags.
+questions across vulnerable primary tags. Within each retry-state tier, the
+balanced selection prefers older self-review input and emits the selected
+questions from older to newer, so recently entered reviews appear later.
 
 The same generator is available from the CLI:
 

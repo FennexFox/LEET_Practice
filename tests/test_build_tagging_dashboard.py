@@ -146,6 +146,9 @@ def test_dashboard_retry_pdf_controls_and_persistent_selection():
     assert 'id="recentRetrySessions"' in html
     assert "const selectedFiles = new Set()" in html
     assert "recommendRecords(filteredRecords(), retryLimit())" in html
+    assert "function reviewInputTimestamp(record)" in html
+    assert "record.review_input_at" in html
+    assert "recommendation.sort(compareRetryRecords)" in html
     assert "fetch('/api/retry-pdf'" in html
     assert "fetch('/api/retry-statuses')" in html
     assert "fetch('/api/retry-sessions')" in html

@@ -1030,7 +1030,22 @@ function retryLimit() {
   return value;
 }
 
+function reviewInputTimestamp(record) {
+  const value = String(record.review_input_at || '').trim();
+  if (!value) return null;
+  const normalized = /(?:Z|[+-]\\d{2}:\\d{2})$/i.test(value) ? value : `${value}Z`;
+  const timestamp = Date.parse(normalized);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
 function compareRetryRecords(left, right) {
+  const leftInputAt = reviewInputTimestamp(left);
+  const rightInputAt = reviewInputTimestamp(right);
+  if (leftInputAt !== null || rightInputAt !== null) {
+    if (leftInputAt === null) return 1;
+    if (rightInputAt === null) return -1;
+    if (leftInputAt !== rightInputAt) return leftInputAt - rightInputAt;
+  }
   const leftConfidence = confidenceOrder[left.provisional_tags.confidence] ?? 9;
   const rightConfidence = confidenceOrder[right.provisional_tags.confidence] ?? 9;
   if (leftConfidence !== rightConfidence) return leftConfidence - rightConfidence;
@@ -1059,6 +1074,9 @@ function balancedRecommendation(records, limit) {
       const record = group.items.shift();
       if (record) recommendation.push(record);
     }
+  }
+  if (recommendation.some(record => reviewInputTimestamp(record) !== null)) {
+    recommendation.sort(compareRetryRecords);
   }
   return recommendation;
 }

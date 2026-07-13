@@ -17,8 +17,9 @@ def _tag_record(
     question_no: int,
     confidence: str = "high",
     holdout: bool = False,
+    review_input_at: str | None = None,
 ) -> dict[str, object]:
-    return {
+    record: dict[str, object] = {
         "review_file": f"data/reviews/exam/{name}.review.json",
         "exam_id": "2025 언어이해 홀수형",
         "year": 2025,
@@ -33,6 +34,9 @@ def _tag_record(
         "holdout": holdout,
         "use_for_tag_frequency": not holdout,
     }
+    if review_input_at is not None:
+        record["review_input_at"] = review_input_at
+    return record
 
 
 def test_recommendation_balances_weak_tags_and_excludes_holdouts() -> None:
@@ -55,6 +59,63 @@ def test_recommendation_balances_weak_tags_and_excludes_holdouts() -> None:
         "data/reviews/exam/c1.review.json",
         "data/reviews/exam/a3.review.json",
         "data/reviews/exam/b2.review.json",
+    ]
+
+
+def test_recommendation_prefers_older_review_input_and_emits_tier_chronologically() -> None:
+    records = [
+        _tag_record(
+            "new-a",
+            "A",
+            question_no=1,
+            confidence="high",
+            review_input_at="2026-07-13T13:00:00",
+        ),
+        _tag_record(
+            "old-a",
+            "A",
+            question_no=2,
+            confidence="low",
+            review_input_at="2026-07-10T13:00:00",
+        ),
+        _tag_record(
+            "middle-b",
+            "B",
+            question_no=3,
+            review_input_at="2026-07-11T13:00:00",
+        ),
+        _tag_record(
+            "oldest-b",
+            "B",
+            question_no=4,
+            review_input_at="2026-07-09T13:00:00",
+        ),
+    ]
+
+    selected, skipped = select_retry_questions(records, data_root=Path("data"), limit=4)
+
+    assert skipped == []
+    assert [row["review_file"] for row in selected] == [
+        "data/reviews/exam/oldest-b.review.json",
+        "data/reviews/exam/old-a.review.json",
+        "data/reviews/exam/middle-b.review.json",
+        "data/reviews/exam/new-a.review.json",
+    ]
+
+
+def test_recommendation_puts_missing_or_invalid_review_input_after_valid_time() -> None:
+    records = [
+        _tag_record("missing", "A", question_no=1),
+        _tag_record("invalid", "A", question_no=2, review_input_at="not-a-date"),
+        _tag_record("valid", "A", question_no=3, review_input_at="2026-07-12T13:00:00Z"),
+    ]
+
+    selected, _ = select_retry_questions(records, data_root=Path("data"), limit=3)
+
+    assert [row["review_file"] for row in selected] == [
+        "data/reviews/exam/valid.review.json",
+        "data/reviews/exam/missing.review.json",
+        "data/reviews/exam/invalid.review.json",
     ]
 
 
@@ -106,10 +167,10 @@ def _status(
 
 def test_retry_history_prioritizes_incorrect_and_excludes_latest_correct() -> None:
     records = [
-        _tag_record("new", "A", question_no=1),
-        _tag_record("correct", "B", question_no=2),
-        _tag_record("wrong", "C", question_no=3),
-        _tag_record("skipped", "D", question_no=4),
+        _tag_record("new", "A", question_no=1, review_input_at="2026-06-01T00:00:00"),
+        _tag_record("correct", "B", question_no=2, review_input_at="2026-05-01T00:00:00"),
+        _tag_record("wrong", "C", question_no=3, review_input_at="2026-07-13T00:00:00"),
+        _tag_record("skipped", "D", question_no=4, review_input_at="2026-07-01T00:00:00"),
     ]
     statuses = {
         "data/reviews/exam/correct.review.json": _status(

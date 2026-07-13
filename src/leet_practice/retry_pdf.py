@@ -139,7 +139,20 @@ def _eligible_record(
     return True
 
 
-def _record_sort_key(record: dict[str, Any]) -> tuple[int, int, str, int, str]:
+def _review_input_sort_key(record: dict[str, Any]) -> tuple[int, float]:
+    value = record.get("review_input_at")
+    if not value:
+        return (1, 0.0)
+    try:
+        parsed = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return (1, 0.0)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return (0, parsed.astimezone(timezone.utc).timestamp())
+
+
+def _record_sort_key(record: dict[str, Any]) -> tuple[int, float, int, int, str, int, str]:
     _, _, confidence = _record_tags(record)
     try:
         year = int(record.get("year") or 9999)
@@ -150,6 +163,7 @@ def _record_sort_key(record: dict[str, Any]) -> tuple[int, int, str, int, str]:
     except (TypeError, ValueError):
         question_no = 0
     return (
+        *_review_input_sort_key(record),
         CONFIDENCE_ORDER.get(str(confidence or "").lower(), 3),
         year,
         str(record.get("section") or ""),
@@ -219,6 +233,8 @@ def _balanced_selection(
                     break
         if not added:
             break
+    if any(_review_input_sort_key(record)[0] == 0 for record in selected):
+        selected.sort(key=_record_sort_key)
     return selected
 
 

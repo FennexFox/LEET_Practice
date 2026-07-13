@@ -57,12 +57,19 @@
 
 ## Progress
 
-- Not started.
+- Added `review_input_at` propagation from `user_self_review.updated_at`.
+- Updated Python and browser recommendation comparators and chronological tier output.
+- Added backend ordering, invalid/missing timestamp, and retry-tier regression coverage.
+- Focused suite passed: 38 tests; Python source compilation passed.
 
 ## Decision log
 
-- No implementation decisions recorded yet.
+- Retry-history tier remains the highest priority.
+- Tag balancing continues to choose the membership of each tier's recommendation; review time is primary inside tag queues, then the balanced result is emitted chronologically.
+- Naive ISO timestamps are interpreted as UTC in both consumers for deterministic cross-environment ordering.
+- Missing and malformed timestamps sort after valid timestamps, then fall back to confidence/year/section/question/file ordering.
 
 ## Outcomes / Retrospective
 
-- Not completed yet.
+- Browser preselection and direct Python/CLI recommendation now share equivalent review-age semantics.
+- Explicit review-file selections bypass recommendation sorting and continue to preserve caller order.
