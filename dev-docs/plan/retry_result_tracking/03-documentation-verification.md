@@ -55,12 +55,34 @@
 
 ## Progress
 
-- Not started.
+- Documented result entry, history-based ordering, latest-correct exclusion,
+  Include completed, resubmission, and local personal-data storage.
+- Regenerated the static dashboard and verified that the QA session identifier
+  was not embedded in it.
+- Completed automated, CLI, HTTP, and rendered-PDF validation without leaving
+  generated personal/output data in the repository.
 
 ## Decision log
 
-- No decisions recorded yet.
+- Documentation states the exact implemented tier order: latest incorrect,
+  latest skipped, never retried, then latest correct only when Include
+  completed is enabled.
+- Objective difficulty is deliberately absent from retry-history ranking; tag
+  balancing remains the secondary distribution mechanism.
+- PDF visual QA used the explicit Windows Malgun Gothic font and PyMuPDF
+  rendering because a Poppler command was unavailable in the environment.
 
 ## Outcomes / Retrospective
 
-- Not completed yet.
+- Full validation: 165 tests passed.
+- Both inline JavaScript bundles passed `node --check`; the CLI help smoke test
+  exposed `--include-completed` with the documented behavior.
+- A three-question real-data workbook produced a schema-v2 manifest with the
+  same session ID shown on page 1. All four pages were rendered and inspected;
+  Korean glyphs, content flow, headers, footers, and the answer-analysis
+  appendix had no clipping or overlap.
+- The static dashboard snapshot was regenerated from 95 records (90 active, 5
+  holdouts), and the QA session ID was absent from the generated HTML.
+- Phase 2's live HTTP smoke covered generation, result-page loading, result
+  submission, and status refresh. In-app browser click testing remained
+  unavailable because the runtime exposed no browser binding.

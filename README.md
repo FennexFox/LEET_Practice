@@ -72,6 +72,7 @@ LEET_Practice/
     canonical/       # local verified exam/question data; ignored by Git by default
     attempts/        # local attempt records; ignored by Git by default
     reviews/         # local wrong-answer reviews; ignored by Git by default
+    retry_attempts/  # local retry-PDF results; ignored by Git by default
   docs/
     data-layout.md
     ocr-strategy.md
@@ -121,6 +122,19 @@ tags, adjust the checkboxes, and choose **Generate retry PDF**. The workbook
 keeps questions and choices in the first section and puts answers, previous
 choices, and error-tag analysis in a separate appendix.
 
+Each generated workbook has a session ID and a matching manifest. After it is
+generated, open **결과 입력**, enter one answer per question, and save the
+session. A blank answer is recorded as `skipped`; filled answers are graded
+locally against the manifest. The result-entry page does not reveal the answer
+key until the session has been submitted.
+
+The next recommendation orders candidates by latest retry state: incorrect,
+skipped, then never retried. Questions whose latest retry answer is correct are
+excluded by default, including from an explicit selection. Enable **Include
+completed** to include them again. Objective difficulty is not used in this
+retry-history policy; the existing tag-balanced ordering still distributes
+questions across vulnerable primary tags.
+
 The same generator is available from the CLI:
 
 ```bash
@@ -128,11 +142,15 @@ python -m pip install -e ".[pdf]"
 leet-practice retry-pdf --limit 20
 leet-practice retry-pdf --tag CHOICE_VERIFICATION_FAILURE --year 2025
 leet-practice retry-pdf --review-file "data/reviews/<attempt>/q01.review.json"
+leet-practice retry-pdf --include-completed
 ```
 
 PDFs and their reproducibility manifests are written together under
 `output/pdf/retry-pdfs/` by default. Use `--font` when a Korean system font
-cannot be discovered automatically.
+cannot be discovered automatically. Saved session results are written to
+`data/retry_attempts/<session_id>.json`; this personal study data is ignored by
+Git and Graphify. Submitting the same session again replaces its saved answers
+instead of adding a duplicate attempt.
 
 ## Design direction
 

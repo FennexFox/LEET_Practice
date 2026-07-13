@@ -205,6 +205,53 @@ Assistant imports must not overwrite `user_self_review`. Provisional tags are
 assistant suggestions only until the user accepts or edits them in
 `user_resolution`.
 
+### `data/retry_attempts/`
+
+Local results submitted after solving a generated retry PDF.
+
+```text
+data/retry_attempts/
+  retry-20260713-143000-a1b2c3d4e5.json
+```
+
+Each file is keyed by the immutable session ID stored in the PDF's matching
+manifest under `output/pdf/retry-pdfs/`. It contains session timestamps and one
+item per selected review file:
+
+```json
+{
+  "schema_version": 1,
+  "session_id": "retry-20260713-143000-a1b2c3d4e5",
+  "manifest_path": "output/pdf/retry-pdfs/retry-20260713-143000.json",
+  "title": "LEET 오답 재풀이",
+  "created_at": "2026-07-13T05:30:00+00:00",
+  "updated_at": "2026-07-13T05:30:00+00:00",
+  "items": [
+    {
+      "review_file": "data/reviews/<attempt_id>/q14.review.json",
+      "question_id": "leet-2026-reasoning-even-q14",
+      "year": 2026,
+      "section": "추리논증",
+      "question_no": 14,
+      "selected_choice": 2,
+      "correct_choice": 4,
+      "outcome": "incorrect",
+      "answered_at": "2026-07-13T05:30:00+00:00",
+      "note": "조건의 예외를 다시 확인할 것"
+    }
+  ]
+}
+```
+
+`outcome` is `correct`, `incorrect`, or `skipped`; a blank submitted choice is
+the only way to produce `skipped`. Saving the same session ID again atomically
+replaces that session file while preserving `created_at`. Recommendation status
+is aggregated by `review_file`, with the most recent result controlling whether
+the question is prioritized or excluded.
+
+This directory contains personal answers, notes, and learning history. It is
+ignored by Git and Graphify and should not be shared as source data.
+
 ## Evidence bundle principle
 
 For a wrong-answer review, preserve both:

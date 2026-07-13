@@ -48,6 +48,13 @@
 
 - python -m pytest -q
 
+## Completion status
+
+- Phase 1 completed in `b80bf4a`.
+- Phase 2 completed in `a8a3f7f`.
+- Phase 3 completed after documentation, PDF rendering, and full-suite
+  validation.
+
 ## Known Risks And Assumptions
 
 - Existing manifests have no `session_id`; reading them derives the ID from
