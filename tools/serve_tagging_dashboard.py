@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
+from uuid import uuid4
 
 import build_tagging_dashboard as dashboard
 
@@ -23,7 +24,7 @@ MAX_RETRY_QUESTIONS = 100
 MAX_RECENT_RETRY_SESSIONS = 50
 OUTPUT_ROOT = (dashboard.ROOT / "output").resolve()
 RETRY_OUTPUT_ROOT = (OUTPUT_ROOT / "pdf" / "retry-pdfs").resolve()
-RETRY_RESULTS_LOCK = threading.Lock()
+RETRY_RESULTS_LOCK = threading.RLock()
 RETRY_SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 RETRY_SHORT_CODE_PATTERN = re.compile(r"^[0-9a-fA-F]{10}$")
 LANGUAGE_SECTION = "\uc5b8\uc5b4\uc774\ud574"
@@ -32,6 +33,10 @@ SECTION_ALIASES = {
     LANGUAGE_SECTION: [LANGUAGE_SECTION, "\uc5b8\uc5b4"],
     REASONING_SECTION: [REASONING_SECTION, "\ucd94\ub9ac"],
 }
+
+
+class RetrySessionDeleteConflict(RuntimeError):
+    """Raised when local file state prevents a safe session deletion."""
 
 
 class TaggingDashboardHandler(BaseHTTPRequestHandler):
@@ -89,6 +94,28 @@ class TaggingDashboardHandler(BaseHTTPRequestHandler):
             self._send_error(exc, wants_json=True, status=status)
             return
         self._send_json(response, status=HTTPStatus.CREATED)
+
+    def do_DELETE(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path != "/api/retry-sessions":
+            self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+            return
+        try:
+            payload = self._read_json_request()
+            response = delete_retry_session_response(payload)
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            self._send_error(exc, wants_json=True, status=HTTPStatus.BAD_REQUEST)
+            return
+        except FileNotFoundError as exc:
+            self._send_error(exc, wants_json=True, status=HTTPStatus.NOT_FOUND)
+            return
+        except RetrySessionDeleteConflict as exc:
+            self._send_error(exc, wants_json=True, status=HTTPStatus.CONFLICT)
+            return
+        except OSError as exc:
+            self._send_error(exc, wants_json=True)
+            return
+        self._send_json(response)
 
     def log_message(self, format: str, *args: object) -> None:
         print(f"{self.address_string()} - {format % args}")
@@ -573,6 +600,131 @@ def resolve_retry_session_manifest(value: str) -> Path:
     return matches[0]["_manifest_path"]
 
 
+def _resolve_exact_retry_session_record(value: str) -> dict[str, Any]:
+    session_id = str(value or "").strip()
+    if not session_id:
+        raise ValueError("Missing retry session ID")
+    if not RETRY_SESSION_ID_PATTERN.fullmatch(session_id):
+        raise ValueError("Deletion requires a valid full session ID")
+    matches = [
+        record for record in _retry_session_records()
+        if record["session_id"] == session_id
+    ]
+    if not matches:
+        raise FileNotFoundError(f"Retry session not found: {session_id}")
+    if len(matches) > 1:
+        raise ValueError("Multiple manifests use that session ID; deletion was canceled")
+    return matches[0]
+
+
+def _retry_session_delete_paths(record: dict[str, Any]) -> dict[str, Path]:
+    manifest_path = Path(record["_manifest_path"]).resolve()
+    retry_root = RETRY_OUTPUT_ROOT.resolve()
+    if not manifest_path.is_relative_to(retry_root) or manifest_path.suffix.lower() != ".json":
+        raise ValueError("Retry manifest is outside the retry-session output directory")
+
+    pdf_path = manifest_path.with_suffix(".pdf").resolve()
+    if not pdf_path.is_relative_to(retry_root):
+        raise ValueError("Retry PDF is outside the retry-session output directory")
+
+    api = _load_retry_result_api()
+    result_root = (dashboard.ROOT / "data" / "retry_attempts").resolve()
+    result_path = api["result_path"](
+        record["session_id"],
+        data_root=dashboard.ROOT / "data",
+    ).resolve()
+    if not result_path.is_relative_to(result_root) or result_path.suffix.lower() != ".json":
+        raise ValueError("Retry result is outside the retry-attempts directory")
+    return {
+        "manifest": manifest_path,
+        "pdf": pdf_path,
+        "result": result_path,
+    }
+
+
+def _delete_retry_session_files(paths: dict[str, Path]) -> tuple[set[str], set[str]]:
+    """Stage all existing files before unlinking, restoring on stage failure."""
+
+    token = uuid4().hex
+    staged: list[tuple[str, Path, Path]] = []
+    try:
+        for artifact, original in paths.items():
+            if not original.is_file():
+                continue
+            tombstone = original.with_name(f".{original.name}.{token}.deleting")
+            original.replace(tombstone)
+            staged.append((artifact, original, tombstone))
+    except OSError as exc:
+        rollback_errors: list[str] = []
+        for artifact, original, tombstone in reversed(staged):
+            try:
+                tombstone.replace(original)
+            except OSError:
+                rollback_errors.append(artifact)
+        detail = (
+            f"; rollback also failed for {', '.join(rollback_errors)}"
+            if rollback_errors else ""
+        )
+        if rollback_errors:
+            raise OSError(
+                f"Could not prepare retry session deletion{detail}; manual recovery may be required"
+            ) from exc
+        raise RetrySessionDeleteConflict(
+            "Could not delete the retry session. Close the PDF if it is open and try again."
+        ) from exc
+
+    cleanup_pending: set[str] = set()
+    for artifact, _original, tombstone in reversed(staged):
+        try:
+            tombstone.unlink()
+        except OSError as exc:
+            cleanup_pending.add(artifact)
+            print(f"Retry deletion cleanup pending for {tombstone}: {exc}")
+    return {artifact for artifact, _original, _tombstone in staged}, cleanup_pending
+
+
+def validate_retry_session_delete_payload(payload: object) -> str:
+    if not isinstance(payload, dict):
+        raise TypeError("JSON body must be an object")
+    unknown = sorted(set(payload) - {"session_id", "confirm_session_id"})
+    if unknown:
+        raise ValueError(f"Unknown fields: {', '.join(unknown)}")
+    session_id = payload.get("session_id")
+    confirmation = payload.get("confirm_session_id")
+    if not isinstance(session_id, str) or not session_id or session_id != session_id.strip():
+        raise TypeError("session_id must be a non-empty full session ID")
+    if not isinstance(confirmation, str) or not confirmation:
+        raise TypeError("confirm_session_id must be a non-empty string")
+    if confirmation != session_id:
+        raise ValueError("Session deletion confirmation does not match the full session ID")
+    if RETRY_SHORT_CODE_PATTERN.fullmatch(session_id):
+        raise ValueError("Deletion requires the full session ID, not its 10-character code")
+    if not RETRY_SESSION_ID_PATTERN.fullmatch(session_id):
+        raise ValueError("Deletion requires a valid full session ID")
+    return session_id
+
+
+def delete_retry_session_response(payload: object) -> dict[str, Any]:
+    session_id = validate_retry_session_delete_payload(payload)
+    with RETRY_RESULTS_LOCK:
+        record = _resolve_exact_retry_session_record(session_id)
+        paths = _retry_session_delete_paths(record)
+        if not paths["manifest"].is_file():
+            raise FileNotFoundError(f"Retry session not found: {session_id}")
+        deleted, cleanup_pending = _delete_retry_session_files(
+            paths
+        )
+    deleted_files = [artifact for artifact in ("manifest", "pdf", "result") if artifact in deleted]
+    missing_files = [artifact for artifact in ("pdf", "result") if artifact not in deleted]
+    return {
+        "session_id": session_id,
+        "deleted": "manifest" in deleted,
+        "deleted_files": deleted_files,
+        "missing_files": missing_files,
+        "cleanup_pending": sorted(cleanup_pending),
+    }
+
+
 def next_retry_output_path() -> Path:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     return OUTPUT_ROOT / "pdf" / "retry-pdfs" / f"retry-{stamp}.pdf"
@@ -668,9 +820,9 @@ def _session_result_payload(result: Any) -> dict[str, Any]:
 
 
 def save_retry_result_response(payload: object) -> dict[str, Any]:
-    options = validate_retry_result_payload(payload)
     api = _load_retry_result_api()
     with RETRY_RESULTS_LOCK:
+        options = validate_retry_result_payload(payload)
         result = api["save"](
             options["manifest_path"],
             options["answers"],

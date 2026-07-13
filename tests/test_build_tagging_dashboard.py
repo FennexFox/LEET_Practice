@@ -672,6 +672,235 @@ def test_retry_session_resolution_supports_full_id_and_unique_short_code(monkeyp
         serve_tagging_dashboard.resolve_retry_session_manifest("abcdef1234")
 
 
+def test_delete_retry_session_removes_manifest_pdf_and_saved_result(monkeypatch, tmp_path):
+    if str(TOOLS_DIR) not in sys.path:
+        sys.path.insert(0, str(TOOLS_DIR))
+
+    import pytest
+    import serve_tagging_dashboard
+
+    retry_root = tmp_path / "output" / "pdf" / "retry-pdfs"
+    session_id = "retry-20260713T150000Z-1234567890"
+    manifest_path = retry_root / "delete-me.json"
+    pdf_path = manifest_path.with_suffix(".pdf")
+    _write_retry_manifest(
+        manifest_path,
+        session_id=session_id,
+        generated_at="2026-07-13T15:00:00+00:00",
+    )
+    pdf_path.write_bytes(b"%PDF-1.4 synthetic")
+    monkeypatch.setattr(serve_tagging_dashboard, "RETRY_OUTPUT_ROOT", retry_root)
+    monkeypatch.setattr(serve_tagging_dashboard.dashboard, "ROOT", tmp_path)
+
+    api = serve_tagging_dashboard._load_retry_result_api()
+    result_path = api["result_path"](session_id, data_root=tmp_path / "data")
+    api["save"](
+        manifest_path,
+        [
+            {
+                "review_file": "data/reviews/exam/q01.review.json",
+                "selected_choice": 4,
+            }
+        ],
+        data_root=tmp_path / "data",
+    )
+
+    payload = {"session_id": session_id, "confirm_session_id": session_id}
+    response = serve_tagging_dashboard.delete_retry_session_response(payload)
+
+    assert response == {
+        "session_id": session_id,
+        "deleted": True,
+        "deleted_files": ["manifest", "pdf", "result"],
+        "missing_files": [],
+        "cleanup_pending": [],
+    }
+    assert not manifest_path.exists()
+    assert not pdf_path.exists()
+    assert not result_path.exists()
+    assert serve_tagging_dashboard.retry_sessions_response()["count"] == 0
+    assert serve_tagging_dashboard.retry_status_response()["by_review_file"] == {}
+    with pytest.raises(FileNotFoundError, match="not found"):
+        serve_tagging_dashboard.delete_retry_session_response(payload)
+
+
+def test_delete_retry_session_requires_exact_confirmed_id_and_allows_missing_companions(
+    monkeypatch,
+    tmp_path,
+):
+    if str(TOOLS_DIR) not in sys.path:
+        sys.path.insert(0, str(TOOLS_DIR))
+
+    import pytest
+    import serve_tagging_dashboard
+
+    retry_root = tmp_path / "retry-pdfs"
+    session_id = "retry-20260713T160000Z-abcdef1234"
+    manifest_path = retry_root / "manifest-only.json"
+    _write_retry_manifest(
+        manifest_path,
+        session_id=session_id,
+        generated_at="2026-07-13T16:00:00+00:00",
+    )
+    outside_pdf = tmp_path / "must-not-delete.pdf"
+    outside_pdf.write_bytes(b"outside retry root")
+    manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_payload["pdf_path"] = str(outside_pdf)
+    manifest_path.write_text(json.dumps(manifest_payload), encoding="utf-8")
+    monkeypatch.setattr(serve_tagging_dashboard, "RETRY_OUTPUT_ROOT", retry_root)
+    monkeypatch.setattr(serve_tagging_dashboard.dashboard, "ROOT", tmp_path)
+
+    with pytest.raises(ValueError, match="confirmation"):
+        serve_tagging_dashboard.delete_retry_session_response(
+            {"session_id": session_id, "confirm_session_id": "wrong-id"}
+        )
+    with pytest.raises(ValueError, match="full session ID"):
+        serve_tagging_dashboard.delete_retry_session_response(
+            {"session_id": "abcdef1234", "confirm_session_id": "abcdef1234"}
+        )
+    with pytest.raises(ValueError, match="valid full session ID"):
+        serve_tagging_dashboard.delete_retry_session_response(
+            {"session_id": "../escape", "confirm_session_id": "../escape"}
+        )
+    with pytest.raises(ValueError, match="Unknown fields"):
+        serve_tagging_dashboard.delete_retry_session_response(
+            {
+                "session_id": session_id,
+                "confirm_session_id": session_id,
+                "manifest_path": str(manifest_path),
+            }
+        )
+    assert manifest_path.is_file()
+
+    response = serve_tagging_dashboard.delete_retry_session_response(
+        {"session_id": session_id, "confirm_session_id": session_id}
+    )
+
+    assert response["deleted"] is True
+    assert response["deleted_files"] == ["manifest"]
+    assert response["missing_files"] == ["pdf", "result"]
+    assert not manifest_path.exists()
+    assert outside_pdf.is_file()
+
+
+def test_delete_retry_session_rejects_duplicate_full_ids(monkeypatch, tmp_path):
+    if str(TOOLS_DIR) not in sys.path:
+        sys.path.insert(0, str(TOOLS_DIR))
+
+    import pytest
+    import serve_tagging_dashboard
+
+    retry_root = tmp_path / "retry-pdfs"
+    session_id = "retry-20260713T170000Z-1111111111"
+    first = retry_root / "first.json"
+    second = retry_root / "second.json"
+    _write_retry_manifest(
+        first,
+        session_id=session_id,
+        generated_at="2026-07-13T17:00:00+00:00",
+    )
+    _write_retry_manifest(
+        second,
+        session_id=session_id,
+        generated_at="2026-07-13T17:01:00+00:00",
+        question_no=2,
+    )
+    monkeypatch.setattr(serve_tagging_dashboard, "RETRY_OUTPUT_ROOT", retry_root)
+    monkeypatch.setattr(serve_tagging_dashboard.dashboard, "ROOT", tmp_path)
+
+    with pytest.raises(ValueError, match="Multiple manifests"):
+        serve_tagging_dashboard.delete_retry_session_response(
+            {"session_id": session_id, "confirm_session_id": session_id}
+        )
+
+    assert first.is_file()
+    assert second.is_file()
+
+
+def test_delete_retry_session_restores_staged_files_when_preparation_fails(
+    monkeypatch,
+    tmp_path,
+):
+    if str(TOOLS_DIR) not in sys.path:
+        sys.path.insert(0, str(TOOLS_DIR))
+
+    import pytest
+    import serve_tagging_dashboard
+
+    retry_root = tmp_path / "retry-pdfs"
+    session_id = "retry-20260713T180000Z-2222222222"
+    manifest_path = retry_root / "rollback.json"
+    pdf_path = manifest_path.with_suffix(".pdf")
+    _write_retry_manifest(
+        manifest_path,
+        session_id=session_id,
+        generated_at="2026-07-13T18:00:00+00:00",
+    )
+    pdf_path.write_bytes(b"%PDF-1.4 synthetic")
+    monkeypatch.setattr(serve_tagging_dashboard, "RETRY_OUTPUT_ROOT", retry_root)
+    monkeypatch.setattr(serve_tagging_dashboard.dashboard, "ROOT", tmp_path)
+    api = serve_tagging_dashboard._load_retry_result_api()
+    result_path = api["result_path"](session_id, data_root=tmp_path / "data")
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    result_path.write_text("{}", encoding="utf-8")
+
+    real_replace = Path.replace
+
+    def fail_for_pdf(path, target):
+        if path == pdf_path:
+            raise OSError("synthetic open PDF")
+        return real_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_for_pdf)
+    with pytest.raises(serve_tagging_dashboard.RetrySessionDeleteConflict, match="Close the PDF"):
+        serve_tagging_dashboard.delete_retry_session_response(
+            {"session_id": session_id, "confirm_session_id": session_id}
+        )
+
+    assert manifest_path.is_file()
+    assert pdf_path.is_file()
+    assert result_path.is_file()
+    assert not list(tmp_path.rglob("*.deleting"))
+
+
+def test_delete_retry_session_reports_tombstone_cleanup_pending(monkeypatch, tmp_path):
+    if str(TOOLS_DIR) not in sys.path:
+        sys.path.insert(0, str(TOOLS_DIR))
+
+    import serve_tagging_dashboard
+
+    retry_root = tmp_path / "retry-pdfs"
+    session_id = "retry-20260713T190000Z-3333333333"
+    manifest_path = retry_root / "cleanup.json"
+    pdf_path = manifest_path.with_suffix(".pdf")
+    _write_retry_manifest(
+        manifest_path,
+        session_id=session_id,
+        generated_at="2026-07-13T19:00:00+00:00",
+    )
+    pdf_path.write_bytes(b"%PDF-1.4 synthetic")
+    monkeypatch.setattr(serve_tagging_dashboard, "RETRY_OUTPUT_ROOT", retry_root)
+    monkeypatch.setattr(serve_tagging_dashboard.dashboard, "ROOT", tmp_path)
+    real_unlink = Path.unlink
+
+    def fail_for_pdf_tombstone(path, missing_ok=False):
+        if ".pdf." in path.name and path.name.endswith(".deleting"):
+            raise OSError("synthetic cleanup failure")
+        return real_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", fail_for_pdf_tombstone)
+    response = serve_tagging_dashboard.delete_retry_session_response(
+        {"session_id": session_id, "confirm_session_id": session_id}
+    )
+
+    assert response["deleted"] is True
+    assert response["cleanup_pending"] == ["pdf"]
+    assert not manifest_path.exists()
+    assert not pdf_path.exists()
+    assert serve_tagging_dashboard.retry_sessions_response()["count"] == 0
+    assert len(list(retry_root.glob("*.deleting"))) == 1
+
+
 def test_retry_pdf_download_rejects_paths_outside_output():
     if str(TOOLS_DIR) not in sys.path:
         sys.path.insert(0, str(TOOLS_DIR))
