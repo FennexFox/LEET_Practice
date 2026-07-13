@@ -574,15 +574,19 @@ def build_dashboard_html(
       <div class="retry-history" aria-labelledby="retryHistoryTitle" lang="ko">
         <div class="retry-history-copy">
           <p class="eyebrow">Saved sessions</p>
-          <h3 id="retryHistoryTitle">기존 재풀이 결과 입력</h3>
-          <p id="retrySessionLookupHint">PDF 첫 페이지의 전체 세션 ID 또는 마지막 10자리 코드를 입력하세요.</p>
+          <h3 id="retryHistoryTitle">기존 재풀이 세션 관리</h3>
+          <p id="retrySessionLookupHint">PDF 첫 페이지의 전체 세션 ID 또는 마지막 10자리 코드로 결과 입력을 열고, 잘못 생성한 세션은 최근 목록에서 삭제하세요.</p>
         </div>
         <form id="retrySessionLookup" class="retry-session-lookup">
           <label class="retry-session-field" for="retrySessionCode"><span>세션 ID 또는 코드</span><input id="retrySessionCode" type="text" required maxlength="128" autocomplete="off" spellcheck="false" aria-describedby="retrySessionLookupHint"></label>
-          <button class="primary-action" type="submit">결과 입력 열기</button>
+          <div class="retry-session-lookup-actions">
+            <button class="primary-action" type="submit">결과 입력 열기</button>
+            <button id="deleteSessionById" class="retry-session-delete" type="button" aria-describedby="retrySessionDeleteHint">전체 ID로 삭제</button>
+          </div>
         </form>
-        <p id="retrySessionHistoryStatus" class="retry-history-status" role="status" aria-live="polite"></p>
+        <p id="retrySessionHistoryStatus" class="retry-history-status" role="status" aria-live="polite" tabindex="-1"></p>
         <ul id="recentRetrySessions" class="retry-session-list" aria-label="최근 생성한 재풀이 세션"></ul>
+        <p id="retrySessionDeleteHint" class="retry-history-warning">세션을 삭제하면 생성된 PDF, 매니페스트와 저장된 풀이 결과가 함께 삭제되며 되돌릴 수 없습니다.</p>
         <p class="retry-history-note">최근 목록과 결과 입력은 <code>python tools/serve_tagging_dashboard.py</code>로 실행한 로컬 대시보드에서 사용할 수 있습니다.</p>
       </div>
       <div class="table-note"><span id="recordCount"></span><span class="scroll-hint"> Scroll sideways for tags and rationale.</span></div>
@@ -790,22 +794,32 @@ tbody tr:hover { background: #f8f9ff; }
 .retry-history-copy h3 { margin: 0; font-size: 17px; }
 .retry-history-copy p:last-child { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
 .retry-session-lookup { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; }
+.retry-session-lookup-actions { display: flex; align-items: center; gap: 8px; }
 .retry-session-field { display: grid; gap: 5px; }
 .retry-session-field > span { color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: .07em; text-transform: uppercase; }
 .retry-session-field input { width: 100%; height: 38px; border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 9px; color: var(--text); background: #fff; font-family: var(--mono); }
 .retry-session-field input:focus { border-color: var(--accent); outline: 3px solid rgba(79,70,229,.11); }
-.retry-session-lookup button { min-height: 38px; border: 1px solid var(--accent); border-radius: 8px; padding: 7px 12px; color: #fff; background: var(--accent); font-weight: 700; cursor: pointer; }
-.retry-session-lookup button:hover { border-color: var(--accent-dark); background: var(--accent-dark); }
+.retry-session-lookup .primary-action { min-height: 38px; border: 1px solid var(--accent); border-radius: 8px; padding: 7px 12px; color: #fff; background: var(--accent); font-weight: 700; cursor: pointer; }
+.retry-session-lookup .primary-action:hover { border-color: var(--accent-dark); background: var(--accent-dark); }
 .retry-history-status { grid-column: 1 / -1; min-height: 17px; margin: 0; color: var(--muted); font-size: 12px; }
 .retry-history-status.error { color: var(--danger); }
+.retry-history-status.success { color: #047857; }
+.retry-history-status:focus { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
 .retry-session-list { grid-column: 1 / -1; display: grid; gap: 8px; max-height: 360px; overflow-y: auto; margin: 0; padding: 0 4px 0 0; list-style: none; }
 .retry-session-item { display: grid; grid-template-columns: minmax(180px, 1.4fr) minmax(210px, 1fr) auto; gap: 10px 16px; align-items: center; padding: 11px 12px; background: #fff; border: 1px solid var(--line); border-radius: 9px; }
+.retry-session-item[aria-busy="true"] { opacity: .65; }
 .retry-session-item strong, .retry-session-item small { display: block; }
 .retry-session-item small { margin-top: 3px; color: var(--muted); }
 .retry-session-identifiers code { display: block; overflow-wrap: anywhere; color: #344054; font-size: 11px; }
 .retry-session-identifiers span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
-.retry-session-open { justify-self: end; font-weight: 750; white-space: nowrap; }
+.retry-session-actions { justify-self: end; display: flex; align-items: center; gap: 10px; }
+.retry-session-open { font-weight: 750; white-space: nowrap; }
+.retry-session-delete { min-height: 34px; border: 1px solid #fda29b; border-radius: 8px; padding: 6px 10px; color: #b42318; background: #fff; font-weight: 750; cursor: pointer; white-space: nowrap; }
+.retry-session-delete:hover { border-color: #d92d20; background: #fef3f2; }
+.retry-session-delete:focus-visible { outline: 3px solid rgba(217,45,32,.16); outline-offset: 1px; }
+.retry-session-delete:disabled { cursor: wait; opacity: .65; }
 .retry-session-empty { padding: 12px; color: var(--muted); background: #fff; border: 1px dashed var(--line-strong); border-radius: 9px; text-align: center; }
+.retry-history-warning { grid-column: 1 / -1; margin: 0; color: #b42318; font-size: 11px; }
 .retry-history-note { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 11px; }
 .retry-history-note code { font-family: var(--mono); }
 .retry-badge { display: inline-flex; border-radius: 999px; padding: 4px 8px; color: var(--muted); background: #f2f4f7; white-space: nowrap; }
@@ -839,7 +853,7 @@ summary { cursor: pointer; font-weight: 600; }
   .retry-builder { grid-template-columns: 1fr 1fr; }
   .retry-actions { grid-column: 1 / -1; }
   .retry-history { grid-template-columns: 1fr; }
-  .retry-session-lookup, .retry-history-status, .retry-session-list, .retry-history-note { grid-column: 1; }
+  .retry-session-lookup, .retry-history-status, .retry-session-list, .retry-history-warning, .retry-history-note { grid-column: 1; }
 }
 @media (max-width: 900px) {
   .overview-intro { grid-template-columns: 1fr; align-items: stretch; }
@@ -868,8 +882,9 @@ summary { cursor: pointer; font-weight: 600; }
   .retry-builder { grid-template-columns: 1fr; }
   .retry-actions, .retry-generate, .retry-status { grid-column: auto; justify-content: flex-start; text-align: left; }
   .retry-session-lookup { grid-template-columns: 1fr; }
+  .retry-session-lookup-actions { flex-wrap: wrap; }
   .retry-session-item { grid-template-columns: 1fr; }
-  .retry-session-open { justify-self: start; }
+  .retry-session-actions { justify-self: start; flex-wrap: wrap; }
   .scroll-hint { display: inline; }
 }
 """
@@ -945,7 +960,9 @@ function selectorCell(record) {
   input.checked = selectedFiles.has(record.review_file);
   input.disabled = !isRetryEligible(record);
   if (input.disabled) {
-    input.title = record.holdout
+    input.title = !retryStatusesLoaded
+      ? 'Retry status must load before selecting this record.'
+      : record.holdout
       ? 'Enable Include holdouts to select this record.'
       : 'Enable Include completed to select a latest-correct record.';
   }
@@ -997,10 +1014,12 @@ function filteredRecords() {
 }
 
 function isRetryEligible(record) {
+  const includeCompleted = document.getElementById('includeCompleted').checked;
   const baseEligible = Boolean(record.use_for_tag_frequency) ||
     (document.getElementById('includeHoldouts').checked && Boolean(record.holdout));
   if (!baseEligible) return false;
-  return retryOutcome(record) !== 'correct' || document.getElementById('includeCompleted').checked;
+  if (!retryStatusesLoaded && !includeCompleted) return false;
+  return retryOutcome(record) !== 'correct' || includeCompleted;
 }
 
 function retryLimit() {
@@ -1103,6 +1122,55 @@ function retrySessionDateLabel(value) {
   }).format(date);
 }
 
+async function deleteRetrySession(session, item, button) {
+  const title = session.title || '제목 없는 재풀이';
+  const sessionDetail = [
+    `세션 ID: ${session.session_id}`,
+    session.generated_at ? `생성: ${retrySessionDateLabel(session.generated_at)}` : '',
+    session.question_count ? `${session.question_count}문항` : ''
+  ].filter(Boolean).join(' · ');
+  const confirmed = window.confirm(
+    `“${title}” 재풀이 세션을 삭제할까요?\n\n` +
+    `${sessionDetail}\n\n` +
+    '생성된 PDF, 매니페스트와 저장된 풀이 결과가 함께 삭제됩니다. 이 작업은 되돌릴 수 없습니다.'
+  );
+  if (!confirmed) return false;
+
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = '삭제 중…';
+  item.setAttribute('aria-busy', 'true');
+  setRetryHistoryStatus(`“${title}” 세션을 삭제하는 중...`);
+  try {
+    const response = await fetch('/api/retry-sessions', {
+      method: 'DELETE',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        session_id: session.session_id,
+        confirm_session_id: session.session_id
+      })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || result.error || '세션 삭제에 실패했습니다.');
+    const cleanupNote = Array.isArray(result.cleanup_pending) && result.cleanup_pending.length
+      ? ' 일부 임시 파일 정리가 남아 있습니다.'
+      : '';
+    await loadRecentRetrySessions(`“${title}” 세션을 삭제했습니다.${cleanupNote}`);
+    await loadRetryStatuses();
+    button.disabled = false;
+    button.textContent = originalLabel;
+    item.removeAttribute('aria-busy');
+    document.getElementById('retrySessionHistoryStatus').focus();
+    return true;
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = originalLabel;
+    item.removeAttribute('aria-busy');
+    setRetryHistoryStatus(`삭제하지 못했습니다: ${error.message || String(error)}`, 'error');
+    return false;
+  }
+}
+
 function renderRecentRetrySessions(sessions) {
   const list = document.getElementById('recentRetrySessions');
   list.replaceChildren();
@@ -1135,17 +1203,27 @@ function renderRecentRetrySessions(sessions) {
     shortCode.textContent = session.short_code ? `코드 ${session.short_code}` : '짧은 코드 없음';
     identifiers.append(fullId, shortCode);
 
+    const actions = document.createElement('div');
+    actions.className = 'retry-session-actions';
     const link = document.createElement('a');
     link.className = 'retry-session-open';
     link.href = `/retry-results?session=${encodeURIComponent(session.session_id)}`;
     link.textContent = '결과 입력 열기';
     link.setAttribute('aria-label', `${session.title || '재풀이'} 결과 입력 열기`);
-    item.append(summary, identifiers, link);
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'retry-session-delete';
+    deleteButton.textContent = '세션 삭제';
+    deleteButton.setAttribute('aria-label', `${session.title || '재풀이'} ${session.session_id} 재풀이 세션 삭제`);
+    deleteButton.setAttribute('aria-describedby', 'retrySessionDeleteHint');
+    deleteButton.addEventListener('click', () => deleteRetrySession(session, item, deleteButton));
+    actions.append(link, deleteButton);
+    item.append(summary, identifiers, actions);
     list.appendChild(item);
   }
 }
 
-async function loadRecentRetrySessions() {
+async function loadRecentRetrySessions(successMessage = '') {
   if (window.location.protocol === 'file:') {
     renderRecentRetrySessions([]);
     setRetryHistoryStatus('최근 세션을 불러오려면 로컬 대시보드 서버로 여세요.', 'error');
@@ -1158,10 +1236,42 @@ async function loadRecentRetrySessions() {
     if (!response.ok) throw new Error(result.message || result.error || '최근 세션을 불러오지 못했습니다.');
     const sessions = Array.isArray(result.sessions) ? result.sessions : [];
     renderRecentRetrySessions(sessions);
-    setRetryHistoryStatus(`${sessions.length}개의 최근 세션을 불러왔습니다.`);
+    setRetryHistoryStatus(
+      successMessage || `${sessions.length}개의 최근 세션을 불러왔습니다.`,
+      successMessage ? 'success' : ''
+    );
+    return true;
   } catch (error) {
     renderRecentRetrySessions([]);
     setRetryHistoryStatus(error.message || String(error), 'error');
+    return false;
+  }
+}
+
+async function loadRetryStatuses() {
+  try {
+    const response = await fetch('/api/retry-statuses');
+    if (!response.ok) throw new Error('Retry status unavailable');
+    const result = await response.json();
+    const statuses = result.by_review_file || {};
+    data.records.forEach(record => { record.retry_status = statuses[record.review_file] || null; });
+    retryStatusesLoaded = true;
+    data.records
+      .filter(record => selectedFiles.has(record.review_file) && !isRetryEligible(record))
+      .forEach(record => selectedFiles.delete(record.review_file));
+    document.getElementById('retryStatusFilter').disabled = false;
+    renderRows();
+    return true;
+  } catch (error) {
+    retryStatusesLoaded = false;
+    data.records.forEach(record => { record.retry_status = null; });
+    selectedFiles.clear();
+    const statusFilter = document.getElementById('retryStatusFilter');
+    statusFilter.value = '';
+    document.getElementById('retryStatusFilter').disabled = true;
+    renderRows();
+    setRetryStatus(error.message || String(error), 'error');
+    return false;
   }
 }
 
@@ -1259,6 +1369,24 @@ document.getElementById('retrySessionLookup').addEventListener('submit', event =
   }
   window.location.assign(`/retry-results?session=${encodeURIComponent(session)}`);
 });
+document.getElementById('deleteSessionById').addEventListener('click', async event => {
+  const input = document.getElementById('retrySessionCode');
+  const sessionId = input.value.trim();
+  if (!sessionId) {
+    input.reportValidity();
+    return;
+  }
+  if (window.location.protocol === 'file:') {
+    setRetryHistoryStatus('세션 삭제는 로컬 대시보드 서버에서 실행해 주세요.', 'error');
+    return;
+  }
+  const deleted = await deleteRetrySession(
+    {session_id: sessionId, title: '입력한 재풀이 세션'},
+    document.getElementById('retrySessionLookup'),
+    event.currentTarget
+  );
+  if (deleted) input.value = '';
+});
 document.getElementById('generateRetryPdf').addEventListener('click', async () => {
   if (!selectedFiles.size) return;
   const button = document.getElementById('generateRetryPdf');
@@ -1298,19 +1426,7 @@ document.getElementById('generateRetryPdf').addEventListener('click', async () =
 });
 renderRows();
 loadRecentRetrySessions();
-fetch('/api/retry-statuses')
-  .then(response => response.ok ? response.json() : Promise.reject(new Error('Retry status unavailable')))
-  .then(result => {
-    const statuses = result.by_review_file || {};
-    data.records.forEach(record => { record.retry_status = statuses[record.review_file] || null; });
-    retryStatusesLoaded = true;
-    document.getElementById('retryStatusFilter').disabled = false;
-    renderRows();
-  })
-  .catch(error => {
-    document.getElementById('retryStatusFilter').disabled = true;
-    setRetryStatus(error.message || String(error), 'error');
-  });
+loadRetryStatuses();
 """
 
 

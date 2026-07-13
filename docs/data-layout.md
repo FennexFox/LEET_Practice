@@ -226,6 +226,14 @@ items, correct choices, notes, or manifest paths. Discovery continues to work
 after restarting the server while the manifest remains in the retry-PDF output
 directory.
 
+The dashboard's session-delete action sends an exact full session ID and a
+matching confirmation value to `DELETE /api/retry-sessions`. Short codes are
+never accepted for deletion. The server removes only the validated manifest,
+its same-stem PDF under `output/pdf/retry-pdfs/`, and the deterministically
+derived `data/retry_attempts/<session_id>.json` result. Paths supplied inside a
+manifest are not trusted as deletion targets. Removing a saved result causes
+the latest retry status to be recalculated from any remaining sessions.
+
 ```json
 {
   "schema_version": 1,

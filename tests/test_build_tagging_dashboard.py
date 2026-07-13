@@ -142,12 +142,15 @@ def test_dashboard_retry_pdf_controls_and_persistent_selection():
     assert 'id="generateRetryPdf"' in html
     assert 'id="retrySessionLookup"' in html
     assert 'id="retrySessionCode"' in html
+    assert 'id="deleteSessionById"' in html
     assert 'id="recentRetrySessions"' in html
     assert "const selectedFiles = new Set()" in html
     assert "recommendRecords(filteredRecords(), retryLimit())" in html
     assert "fetch('/api/retry-pdf'" in html
     assert "fetch('/api/retry-statuses')" in html
     assert "fetch('/api/retry-sessions')" in html
+    assert "method: 'DELETE'" in html
+    assert "confirm_session_id: session.session_id" in html
     assert "['결과 입력', result.result_entry_url]" in html
     assert "/retry-results?session=${encodeURIComponent(session)}" in html
     assert "loadRecentRetrySessions();" in html
@@ -159,15 +162,37 @@ def test_dashboard_retry_session_lookup_is_accessible_and_server_explicit():
     builder = load_builder()
     html = builder.build_current_dashboard_html()
 
-    assert '<h3 id="retryHistoryTitle">기존 재풀이 결과 입력</h3>' in html
+    assert '<h3 id="retryHistoryTitle">기존 재풀이 세션 관리</h3>' in html
     assert '<label class="retry-session-field" for="retrySessionCode">' in html
     assert 'aria-describedby="retrySessionLookupHint"' in html
     assert 'id="retrySessionHistoryStatus"' in html
     assert 'role="status" aria-live="polite"' in html
+    assert 'tabindex="-1"' in html
     assert 'python tools/serve_tagging_dashboard.py' in html
     assert "window.location.protocol === 'file:'" in html
     assert "결과 입력은 로컬 대시보드 서버에서 열어 주세요." in html
     assert "textContent = session.title" in html
+    assert 'id="retrySessionDeleteHint"' in html
+    assert "PDF, 매니페스트와 저장된 풀이 결과가 함께 삭제" in html
+    assert "window.confirm(" in html
+    assert "`세션 ID: ${session.session_id}`" in html
+    assert "deleteButton.type = 'button'" in html
+    assert "deleteButton.className = 'retry-session-delete'" in html
+    assert "${session.title || '재풀이'} ${session.session_id} 재풀이 세션 삭제" in html
+    assert "deleteButton.setAttribute('aria-describedby', 'retrySessionDeleteHint')" in html
+    assert "item.setAttribute('aria-busy', 'true')" in html
+    assert "deleteRetrySession(session, item, deleteButton)" in html
+    assert "await loadRecentRetrySessions(" in html
+    assert "await loadRetryStatuses()" in html
+    assert "selectedFiles.has(record.review_file) && !isRetryEligible(record)" in html
+    assert "retryStatusesLoaded = false" in html
+    assert "if (!retryStatusesLoaded && !includeCompleted) return false" in html
+    assert "data.records.forEach(record => { record.retry_status = null; })" in html
+    assert "statusFilter.value = ''" in html
+    assert "document.getElementById('retrySessionHistoryStatus').focus()" in html
+    assert ".retry-history-status:focus { outline: 2px solid var(--accent)" in html
+    assert "{session_id: sessionId, title: '입력한 재풀이 세션'}" in html
+    assert "삭제하지 못했습니다:" in html
 
 
 def test_dashboard_frequency_after_v1_corrections():
@@ -899,6 +924,95 @@ def test_delete_retry_session_reports_tombstone_cleanup_pending(monkeypatch, tmp
     assert not pdf_path.exists()
     assert serve_tagging_dashboard.retry_sessions_response()["count"] == 0
     assert len(list(retry_root.glob("*.deleting"))) == 1
+
+
+def test_retry_session_delete_http_endpoint_maps_validation_and_conflicts(monkeypatch, tmp_path):
+    if str(TOOLS_DIR) not in sys.path:
+        sys.path.insert(0, str(TOOLS_DIR))
+
+    import http.client
+    import threading
+
+    import serve_tagging_dashboard
+
+    retry_root = tmp_path / "retry-pdfs"
+    session_id = "retry-20260713T210000Z-5555555555"
+    manifest_path = retry_root / "http-delete.json"
+    pdf_path = manifest_path.with_suffix(".pdf")
+    _write_retry_manifest(
+        manifest_path,
+        session_id=session_id,
+        generated_at="2026-07-13T21:00:00+00:00",
+    )
+    pdf_path.write_bytes(b"%PDF-1.4 synthetic")
+    monkeypatch.setattr(serve_tagging_dashboard, "RETRY_OUTPUT_ROOT", retry_root)
+    monkeypatch.setattr(serve_tagging_dashboard.dashboard, "ROOT", tmp_path)
+
+    httpd = serve_tagging_dashboard.ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        serve_tagging_dashboard.TaggingDashboardHandler,
+    )
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+
+    def delete(payload):
+        connection = http.client.HTTPConnection("127.0.0.1", httpd.server_port, timeout=5)
+        try:
+            connection.request(
+                "DELETE",
+                "/api/retry-sessions",
+                body=json.dumps(payload),
+                headers={"Content-Type": "application/json"},
+            )
+            response = connection.getresponse()
+            body = json.loads(response.read().decode("utf-8"))
+            return response.status, body
+        finally:
+            connection.close()
+
+    try:
+        status, _ = delete(
+            {"session_id": session_id, "confirm_session_id": "wrong-id"}
+        )
+        assert status == HTTPStatus.BAD_REQUEST
+        assert manifest_path.is_file()
+
+        status, response = delete(
+            {"session_id": session_id, "confirm_session_id": session_id}
+        )
+        assert status == HTTPStatus.OK
+        assert response["deleted_files"] == ["manifest", "pdf"]
+
+        status, _ = delete(
+            {"session_id": session_id, "confirm_session_id": session_id}
+        )
+        assert status == HTTPStatus.NOT_FOUND
+
+        conflict_id = "retry-20260713T220000Z-6666666666"
+        conflict_manifest = retry_root / "http-conflict.json"
+        _write_retry_manifest(
+            conflict_manifest,
+            session_id=conflict_id,
+            generated_at="2026-07-13T22:00:00+00:00",
+        )
+
+        def raise_conflict(paths):
+            raise serve_tagging_dashboard.RetrySessionDeleteConflict("synthetic conflict")
+
+        monkeypatch.setattr(
+            serve_tagging_dashboard,
+            "_delete_retry_session_files",
+            raise_conflict,
+        )
+        status, _ = delete(
+            {"session_id": conflict_id, "confirm_session_id": conflict_id}
+        )
+        assert status == HTTPStatus.CONFLICT
+        assert conflict_manifest.is_file()
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=5)
+        httpd.server_close()
 
 
 def test_retry_pdf_download_rejects_paths_outside_output():

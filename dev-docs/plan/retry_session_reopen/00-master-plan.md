@@ -53,9 +53,10 @@
   resolution, and the recent-session API.
 - Phase 2 completed with delayed-entry controls, recent history, documentation,
   and restart validation.
-- Phase 3 completed with exact-ID confirmed bundle deletion, staged rollback,
-  lifecycle locking, and HTTP validation.
-- Phase 4 not started.
+- Phase 3 completed in `733d4b9` with exact-ID confirmed bundle deletion,
+  staged rollback, lifecycle locking, and HTTP validation.
+- Phase 4 completed with destructive-action UX, live state refresh,
+  documentation, and generated-dashboard validation.
 
 ## Known Risks And Assumptions
 
