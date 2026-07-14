@@ -996,7 +996,9 @@ def workbench_html() -> str:
     .queue-item.active { background: #e8f0ef; }
     .queue-item strong { display: block; }
     .queue-item span { color: #5f6368; font-size: 12px; }
-    .question { padding: 16px; }
+    .question { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+    .question-summary { flex: 0 0 auto; padding: 16px; border-bottom: 1px solid #d7d7d2; background: #f7f7f4; }
+    .question-content { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 16px; }
     .passage-box { border-bottom: 1px solid #d7d7d2; margin-bottom: 16px; padding-bottom: 16px; }
     .passage-box.hidden { display: none; }
     .passage-text { white-space: pre-wrap; line-height: 1.7; overflow-wrap: anywhere; }
@@ -1025,15 +1027,19 @@ def workbench_html() -> str:
   <main>
     <aside id="queue"></aside>
     <section class="question">
-      <h2 id="questionTitle"></h2>
-      <div id="grading"></div>
-      <div id="passageBox" class="passage-box hidden">
-        <h3>Passage</h3>
-        <div id="passageText" class="passage-text"></div>
+      <div class="question-summary">
+        <h2 id="questionTitle"></h2>
+        <div id="grading"></div>
       </div>
-      <h3>Question</h3>
-      <p id="stem" class="muted"></p>
-      <div id="choices"></div>
+      <div class="question-content">
+        <div id="passageBox" class="passage-box hidden">
+          <h3>Passage</h3>
+          <div id="passageText" class="passage-text"></div>
+        </div>
+        <h3>Question</h3>
+        <p id="stem" class="muted"></p>
+        <div id="choices"></div>
+      </div>
     </section>
     <section class="editor">
       <label title="Current workflow state for this review. Use ready_for_feedback when your self-review is complete enough to export.">Status</label><select id="status">

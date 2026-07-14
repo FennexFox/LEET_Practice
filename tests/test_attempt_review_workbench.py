@@ -57,6 +57,15 @@ def test_attempt_review_workbench_serves_state_and_updates_review(tmp_path: Path
         assert "choice-text" in root
         assert "passageBox" in root
         assert "passage-text" in root
+        assert '<div class="question-summary">' in root
+        assert '<h2 id="questionTitle"></h2>' in root
+        assert '<div id="grading"></div>' in root
+        assert ".question { display: flex; flex-direction: column; padding: 0; overflow: hidden; }" in root
+        assert ".question-summary { flex: 0 0 auto;" in root
+        assert ".question-content { flex: 1 1 auto; min-height: 0; overflow: auto;" in root
+        assert '<div class="question-content">' in root
+        assert 'document.getElementById("questionTitle").textContent = `Question ${questionNo}`' in root
+        assert 'document.getElementById("grading").innerHTML = `Selected <span class="pill bad">' in root
         assert "Free-form reconstruction" in root
         assert "Your current post-hoc understanding" in root
         assert "diagnosis.textContent" in root
@@ -65,6 +74,7 @@ def test_attempt_review_workbench_serves_state_and_updates_review(tmp_path: Path
         state = json.loads(urllib.request.urlopen(f"{base_url}/api/state", timeout=5).read().decode("utf-8"))
         assert state["score"] == 0
         assert state["wrong_question_numbers"] == [1]
+        assert state["reviews"][0]["grading"]["selected_choice"] == 1
         assert state["reviews"][0]["grading"]["correct_choice"] == 3
         assert state["questions"]["1"]["stem"] == "Which choice follows?\n\nRead the passage carefully."
         assert state["questions"]["1"]["passage_text"] == "Passage paragraph one.\n\nPassage paragraph two."
