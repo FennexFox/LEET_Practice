@@ -32,22 +32,22 @@ Keep under observation:
 | `data/reviews/2026 언어이해 홀수형/q12.review.json` | primary `RELATION_DIRECTION_REVERSAL`; secondary `TEXTUAL_REDEFINITION_MISSED` | primary `TEXTUAL_REDEFINITION_MISSED`; secondary `RELATION_DIRECTION_REVERSAL` | The core failure was treating the passage's institution-change wording, especially 보완/도입, as 대체. |
 | `data/reviews/2026 추리논증 홀수형/q29.review.json` | primary `ARGUMENT_STRUCTURE_INCOMPLETE`; no secondary | primary `ARGUMENT_STRUCTURE_INCOMPLETE`; secondary `UNWARRANTED_ASSUMPTION_ADDED` | A weakening of theory A was treated as an automatic strengthening of theory B by adding an unsupported mutually exclusive relation. |
 
-## Active primary frequency after corrections
+## Active primary frequency after 2024 tagging
 
-There are currently no holdout records; future holdouts remain excluded.
+The 17 active 2024 review records fit the existing taxonomy without a new tag. There are currently no holdout records; future holdouts remain excluded.
 
 | Tag | Active primary count |
 | --- | ---: |
-| `SCOPE_CONDITION_MISAPPLICATION` | 18 |
-| `CONCEPT_LAYER_CONFUSION` | 14 |
+| `SCOPE_CONDITION_MISAPPLICATION` | 22 |
+| `CONCEPT_LAYER_CONFUSION` | 20 |
 | `ARGUMENT_STRUCTURE_INCOMPLETE` | 9 |
 | `FORMAL_CONDITION_ERROR` | 10 |
 | `CHOICE_VERIFICATION_FAILURE` | 5 |
-| `GLOBAL_CONSTRAINT_DROPPED` | 10 |
-| `TABLE_DIAGRAM_ENCODING_ERROR` | 10 |
+| `GLOBAL_CONSTRAINT_DROPPED` | 11 |
+| `TABLE_DIAGRAM_ENCODING_ERROR` | 13 |
 | `ROLE_ATTRIBUTION_ERROR` | 4 |
 | `RELATION_DIRECTION_REVERSAL` | 4 |
-| `TEXTUAL_REDEFINITION_MISSED` | 3 |
+| `TEXTUAL_REDEFINITION_MISSED` | 6 |
 | `UNWARRANTED_ASSUMPTION_ADDED` | 6 |
 | `TIME_PRESSURE_OR_ATTENTION_LAPSE` | 2 |
 

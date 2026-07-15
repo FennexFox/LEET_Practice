@@ -2,9 +2,9 @@
 
 ## Corpus Counts
 
-- Review files inspected: 95
-- Wrong-answer records written: 95
-- Active records used for tag analysis: 95
+- Review files inspected: 112
+- Wrong-answer records written: 112
+- Active records used for tag analysis: 112
 - Holdout records excluded from tag analysis: 0
 - Needs-review records excluding holdouts: 1
 - Holdout records requiring later re-solve: 0
@@ -17,28 +17,29 @@ No holdout records are currently present in `provisional_tags.jsonl`.
 
 | Tag | Primary count | Primary+secondary count |
 | --- | --- | --- |
-| `SCOPE_CONDITION_MISAPPLICATION` | 18 | 22 |
-| `CONCEPT_LAYER_CONFUSION` | 14 | 19 |
-| `TABLE_DIAGRAM_ENCODING_ERROR` | 10 | 13 |
-| `GLOBAL_CONSTRAINT_DROPPED` | 10 | 13 |
+| `SCOPE_CONDITION_MISAPPLICATION` | 22 | 27 |
+| `CONCEPT_LAYER_CONFUSION` | 20 | 27 |
+| `TABLE_DIAGRAM_ENCODING_ERROR` | 13 | 16 |
+| `GLOBAL_CONSTRAINT_DROPPED` | 11 | 14 |
 | `FORMAL_CONDITION_ERROR` | 10 | 17 |
 | `ARGUMENT_STRUCTURE_INCOMPLETE` | 9 | 12 |
-| `UNWARRANTED_ASSUMPTION_ADDED` | 6 | 12 |
-| `CHOICE_VERIFICATION_FAILURE` | 5 | 14 |
+| `UNWARRANTED_ASSUMPTION_ADDED` | 6 | 13 |
+| `TEXTUAL_REDEFINITION_MISSED` | 6 | 12 |
+| `CHOICE_VERIFICATION_FAILURE` | 5 | 17 |
 | `RELATION_DIRECTION_REVERSAL` | 4 | 9 |
 | `ROLE_ATTRIBUTION_ERROR` | 4 | 5 |
-| `TEXTUAL_REDEFINITION_MISSED` | 3 | 8 |
 | `TIME_PRESSURE_OR_ATTENTION_LAPSE` | 2 | 7 |
 
 ## High-Confidence Recurring Tags
 
-- `SCOPE_CONDITION_MISAPPLICATION`: 18 primary records
-- `CONCEPT_LAYER_CONFUSION`: 14 primary records
-- `TABLE_DIAGRAM_ENCODING_ERROR`: 10 primary records
-- `GLOBAL_CONSTRAINT_DROPPED`: 10 primary records
+- `SCOPE_CONDITION_MISAPPLICATION`: 22 primary records
+- `CONCEPT_LAYER_CONFUSION`: 20 primary records
+- `TABLE_DIAGRAM_ENCODING_ERROR`: 13 primary records
+- `GLOBAL_CONSTRAINT_DROPPED`: 11 primary records
 - `FORMAL_CONDITION_ERROR`: 10 primary records
 - `ARGUMENT_STRUCTURE_INCOMPLETE`: 9 primary records
 - `UNWARRANTED_ASSUMPTION_ADDED`: 6 primary records
+- `TEXTUAL_REDEFINITION_MISSED`: 6 primary records
 - `CHOICE_VERIFICATION_FAILURE`: 5 primary records
 
 ## Low-Confidence Or Unstable Tags

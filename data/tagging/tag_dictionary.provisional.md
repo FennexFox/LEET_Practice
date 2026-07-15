@@ -109,7 +109,7 @@ These tags are provisional mechanism labels for review and later promotion. They
 - Positive criteria: 인정, 복종, 대체, 제3자, 업무수탁자처럼 지문 안 정의가 선지 판단의 기준일 때 사용한다.
 - Negative criteria: 용어 정의는 보존했지만 조건 일부를 놓친 경우에는 SCOPE_CONDITION_MISAPPLICATION을 우선한다.
 - Neighboring tags: CONCEPT_LAYER_CONFUSION은 정의보다 층위 구분이 핵심일 때 쓴다.
-- Representative review files: data/reviews/2022 언어이해 홀수형/q29.review.json, data/reviews/2022 추리논증 짝수형/q06.review.json, data/reviews/2026 언어이해 홀수형/q12.review.json
+- Representative review files: data/reviews/2022 언어이해 홀수형/q29.review.json, data/reviews/2022 추리논증 짝수형/q06.review.json, data/reviews/2024 언어이해 홀수형/q12.review.json, data/reviews/2024 언어이해 홀수형/q18.review.json
 - Suggested correction rule: 핵심 용어 옆에 지문식 정의를 짧게 붙이고, 일상어 의미로 대체하지 않는다.
 
 ## `TIME_PRESSURE_OR_ATTENTION_LAPSE`

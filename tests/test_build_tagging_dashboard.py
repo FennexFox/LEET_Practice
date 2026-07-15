@@ -47,12 +47,12 @@ def test_dashboard_builder_generates_html():
 def test_dashboard_counts_match_tagging_jsonl():
     records = load_records()
 
-    assert len(records) == 95
+    assert len(records) == 112
     assert all(
         isinstance(record.get("review_input_at"), str) and record["review_input_at"]
         for record in records
     )
-    assert sum(record["use_for_tag_frequency"] is True for record in records) == 95
+    assert sum(record["use_for_tag_frequency"] is True for record in records) == 112
     assert sum(record["holdout"] is True for record in records) == 0
     assert (
         sum(
@@ -88,6 +88,34 @@ def test_2025_reasoning_retake_replaces_old_holdouts():
         and "짝수형" in record["review_file"]
         for record in records
     )
+
+
+def test_2024_reviews_are_fully_tagged():
+    records = [record for record in load_records() if record["year"] == 2024]
+
+    assert len(records) == 17
+    assert {(record["section"], record["question_no"]) for record in records} == {
+        ("언어이해", 1),
+        ("언어이해", 3),
+        ("언어이해", 7),
+        ("언어이해", 12),
+        ("언어이해", 15),
+        ("언어이해", 18),
+        ("언어이해", 19),
+        ("언어이해", 21),
+        ("언어이해", 28),
+        ("추리논증", 4),
+        ("추리논증", 8),
+        ("추리논증", 12),
+        ("추리논증", 13),
+        ("추리논증", 15),
+        ("추리논증", 16),
+        ("추리논증", 27),
+        ("추리논증", 37),
+    }
+    assert all(record["provisional_tags"]["confidence"] == "high" for record in records)
+    assert all(record["needs_review"] is False for record in records)
+    assert all(record["holdout"] is False for record in records)
 
 
 def test_dashboard_includes_v1_tag_sets():
@@ -202,18 +230,18 @@ def test_dashboard_retry_session_lookup_is_accessible_and_server_explicit():
     assert "삭제하지 못했습니다:" in html
 
 
-def test_dashboard_frequency_after_v1_corrections():
+def test_dashboard_frequency_after_2024_tagging():
     records = load_records()
     active = [record for record in records if record["use_for_tag_frequency"] is True]
     counts = Counter(record["provisional_tags"]["primary"] for record in active)
 
-    assert counts["SCOPE_CONDITION_MISAPPLICATION"] == 18
-    assert counts["CONCEPT_LAYER_CONFUSION"] == 14
-    assert counts["TABLE_DIAGRAM_ENCODING_ERROR"] == 10
+    assert counts["SCOPE_CONDITION_MISAPPLICATION"] == 22
+    assert counts["CONCEPT_LAYER_CONFUSION"] == 20
+    assert counts["TABLE_DIAGRAM_ENCODING_ERROR"] == 13
     assert counts["RELATION_DIRECTION_REVERSAL"] == 4
-    assert counts["TEXTUAL_REDEFINITION_MISSED"] == 3
+    assert counts["TEXTUAL_REDEFINITION_MISSED"] == 6
     assert counts["FORMAL_CONDITION_ERROR"] == 10
-    assert counts["GLOBAL_CONSTRAINT_DROPPED"] == 10
+    assert counts["GLOBAL_CONSTRAINT_DROPPED"] == 11
     assert counts["UNWARRANTED_ASSUMPTION_ADDED"] == 6
     assert "INSUFFICIENT_REVIEW_BASIS" not in counts
 
@@ -289,7 +317,7 @@ def test_live_dashboard_handler_serves_current_html():
     assert captured["status"] == HTTPStatus.OK
     assert captured["content_type"] == "text/html; charset=utf-8"
     assert "LEET Tagging Dashboard" in html
-    assert "95" in html
+    assert "112" in html
 
 
 def test_live_review_page_shows_question_and_retry():
